@@ -1,7 +1,0 @@
-use stdio;
-
-func main(){
-    let Name:string = "NamWhan";
-    let number = 12;
-    print(Name);
-}

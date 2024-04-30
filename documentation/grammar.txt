@@ -1,0 +1,10 @@
+function = func <Identifier>() [: <datatype>]{}
+import = import <string_literal> [as <Identifier>];
+const = const <datatype> <Identifier> = <literal|Identifier|BinExp>;
+return = return <literal|Identifier|BinExp>;
+<datatype> <Identifier>;
+<datatype> <Identifier> = <literal|Identifier|BinExp>;
+
+rule:
+PimaryExpression = <literal|Identifier|BinExp>;
+BinExp = <PimaryExpression> <Operator> <PimaryExpression>

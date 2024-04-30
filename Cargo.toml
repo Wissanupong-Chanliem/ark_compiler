@@ -1,5 +1,5 @@
 [package]
-name = "whanlang_compiler"
+name = "ark_compiler"
 version = "0.1.0"
 edition = "2021"
 

@@ -2,7 +2,7 @@ use std::vec;
 use regex::Regex;
 
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug,PartialEq,Clone,Copy)]
 pub enum KeyWords{
     FUNC,
     IMPORT,
@@ -33,7 +33,7 @@ impl KeyWords {
     }
 }
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug,PartialEq,Clone)]
 pub enum DataType{
     Void,
     I8,
@@ -50,27 +50,27 @@ pub enum DataType{
     Boolean,
 }
 
-impl DataType {
-    fn clone(&self) -> DataType {
-        match self{
-            DataType::Void => {DataType::Void},
-            DataType::I8 => {DataType::I8},
-            DataType::I16 => {DataType::I16},
-            DataType::I32 => {DataType::I32},
-            DataType::I64 => {DataType::I64},
-            DataType::U8 => {DataType::U8},
-            DataType::U16 => {DataType::U16},
-            DataType::U32 => {DataType::U32},
-            DataType::U64 => {DataType::U64},
-            DataType::F32 => {DataType::F32},
-            DataType::F64 => {DataType::F64},
-            DataType::String => {DataType::String},
-            DataType::Boolean => {DataType::Boolean},
-        }
-    }
-}
+// impl DataType {
+//     pub fn clone(&self) -> DataType {
+//         match self{
+//             DataType::Void => {DataType::Void},
+//             DataType::I8 => {DataType::I8},
+//             DataType::I16 => {DataType::I16},
+//             DataType::I32 => {DataType::I32},
+//             DataType::I64 => {DataType::I64},
+//             DataType::U8 => {DataType::U8},
+//             DataType::U16 => {DataType::U16},
+//             DataType::U32 => {DataType::U32},
+//             DataType::U64 => {DataType::U64},
+//             DataType::F32 => {DataType::F32},
+//             DataType::F64 => {DataType::F64},
+//             DataType::String => {DataType::String},
+//             DataType::Boolean => {DataType::Boolean},
+//         }
+//     }
+// }
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug,PartialEq,Clone)]
 pub enum Token{
     Keyword(KeyWords),
     DataType(DataType),
@@ -101,39 +101,39 @@ pub enum Token{
     EOF
 }
 
-impl Token{
-    pub fn clone(&self) -> Token{
-        match self{
-            Token::Keyword(keyword) => {Token::Keyword(keyword.clone())},
-            Token::DataType(data_type) => {Token::DataType(data_type.clone())},
-            Token::Identifier(id) => {Token::Identifier(id.to_owned())},
-            Token::IntLiteral(i) => {Token::IntLiteral(i.to_owned())},
-            Token::FloatLiteral(f) => {Token::FloatLiteral(f.to_owned())},
-            Token::StringLiteral(s) => {Token::StringLiteral(s.to_owned())},
-            Token::AdditionOperator => {Token::AdditionOperator},
-            Token::SubtractionOperator => {Token::SubtractionOperator},
-            Token::MultiplicationOperator => {Token::MultiplicationOperator},
-            Token::DivisionOperator => {Token::DivisionOperator},
-            Token::ModuloOperator => {Token::ModuloOperator},
-            Token::AssignmentOperator => {Token::AssignmentOperator},
-            Token::ScopeResolution => {Token::ScopeResolution},
-            Token::Colon => {Token::Colon},
-            Token::Equal => {Token::Equal},
-            Token::Less => {Token::Less},
-            Token::LessEqual => {Token::LessEqual},
-            Token::More => {Token::More},
-            Token::MoreEqual => {Token::MoreEqual},
-            Token::LeftParen => {Token::LeftParen},
-            Token::RightParen => {Token::RightParen},
-            Token::LeftBrace => {Token::LeftBrace},
-            Token::RightBrace => {Token::RightBrace},
-            Token::Comma => {Token::Comma},
-            Token::Dot => {Token::Dot},
-            Token::SemiColon => {Token::SemiColon},
-            Token::EOF => {Token::EOF},
-        }
-    }
-}
+// impl Token{
+//     pub fn clone(&self) -> Token{
+//         match self{
+//             Token::Keyword(keyword) => {Token::Keyword(keyword.clone())},
+//             Token::DataType(data_type) => {Token::DataType(data_type.clone())},
+//             Token::Identifier(id) => {Token::Identifier(id.to_owned())},
+//             Token::IntLiteral(i) => {Token::IntLiteral(i.to_owned())},
+//             Token::FloatLiteral(f) => {Token::FloatLiteral(f.to_owned())},
+//             Token::StringLiteral(s) => {Token::StringLiteral(s.to_owned())},
+//             Token::AdditionOperator => {Token::AdditionOperator},
+//             Token::SubtractionOperator => {Token::SubtractionOperator},
+//             Token::MultiplicationOperator => {Token::MultiplicationOperator},
+//             Token::DivisionOperator => {Token::DivisionOperator},
+//             Token::ModuloOperator => {Token::ModuloOperator},
+//             Token::AssignmentOperator => {Token::AssignmentOperator},
+//             Token::ScopeResolution => {Token::ScopeResolution},
+//             Token::Colon => {Token::Colon},
+//             Token::Equal => {Token::Equal},
+//             Token::Less => {Token::Less},
+//             Token::LessEqual => {Token::LessEqual},
+//             Token::More => {Token::More},
+//             Token::MoreEqual => {Token::MoreEqual},
+//             Token::LeftParen => {Token::LeftParen},
+//             Token::RightParen => {Token::RightParen},
+//             Token::LeftBrace => {Token::LeftBrace},
+//             Token::RightBrace => {Token::RightBrace},
+//             Token::Comma => {Token::Comma},
+//             Token::Dot => {Token::Dot},
+//             Token::SemiColon => {Token::SemiColon},
+//             Token::EOF => {Token::EOF},
+//         }
+//     }
+// }
 
 pub enum GroupToken{
     LeftParen,

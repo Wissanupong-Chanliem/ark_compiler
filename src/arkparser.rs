@@ -1,45 +1,117 @@
 use self::tokenizer::{DataType, KeyWords, Token};
-use std::{collections::HashMap, mem};
+use std::{collections::HashMap, mem, ops::Deref, str::FromStr};
 mod tokenizer;
 
-struct ASTNode {}
-
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 enum Node {
-    Body(body),
-    Variable(var),
+    Body(Body),
+    Variable(String),
+    DeclareVar(Var),
+    Assignment(BinExp),
+    Literal(LiteralValue),
     BinaryExpression(BinExp),
-    Function(func),
-    Import(import),
+    Function(FuncDef),
+    FunctionCall(FuncCall),
+    MethodCall(MethodCall),
+    Import(Import),
+    Return(Option<Box<Node>>),
+    Error(String),
 }
 
-#[derive(Debug)]
-struct body {
-    instructions: Vec<Box<Node>>,
+// impl Node {
+//     fn clone(&self) -> Node {
+//         match self{
+//             Node::Body(bd) => {Node::Body(Body { instructions: bd.instructions })},
+//             Node::Variable(v) => {Node::Variable(v.to_owned())},
+//             Node::DeclareVar(v) => {Node::DeclareVar(Var { constant: v.constant.to_owned(), name: v.name.to_owned(), var_type: v.var_type.clone() })},
+//             Node::Assignment(a) => {Node::Assignment(a.clone())},
+//             Node::Literal(l) => {
+//                 let v = match l{
+//                     LiteralValue::Int(I) => {LiteralValue::Int(*I)},
+//                     LiteralValue::Float(F) => {LiteralValue::Float(*F)},
+//                     LiteralValue::Str(S) => {LiteralValue::Str(*S)},
+//                 };
+//                 Node::Literal(v)
+//             },
+//             Node::BinaryExpression(b) => {Node::BinaryExpression(b.clone())},
+//             Node::Function(f) => {
+//                 Node::Function(
+//                     FuncDef {
+//                         function_name: f.function_name.clone(),
+//                         body: Body { instructions: f.body.instructions.to_vec() },
+//                         return_type: (),
+//                         parameter: () 
+//                     }
+//                 )
+//             },
+//             Node::FunctionCall(f) => todo!(),
+//             Node::MethodCall(_) => todo!(),
+//             Node::Import(_) => todo!(),
+//             Node::Return(_) => todo!(),
+//             Node::Error(_) => todo!(),
+//         }
+//     }
+// }
+
+#[derive(Debug,Clone)]
+enum LiteralValue {
+    Int(i32),
+    Float(f64),
+    Str(String)
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
+struct Body {
+    instructions: Vec<Node>,
+}
+
+#[derive(Debug,Clone)]
 struct BinExp {
     left: Option<Box<Node>>,
     right: Option<Box<Node>>,
     operator: tokenizer::Token,
 }
 
-#[derive(Debug)]
-struct var {
+// impl BinExp {
+//     pub fn clone(&self) -> BinExp {
+//         BinExp {
+//             left: Some(Box::new((*self.left.unwrap()).clone())),
+//             right: Some(Box::new((*self.left.unwrap()).clone())),
+//             operator: self.operator.clone()
+//         }
+//     }
+// }
+
+#[derive(Debug,Clone)]
+struct Var {
     constant:bool,
     name: String,
     var_type: DataType,
 }
-#[derive(Debug)]
-struct func {
+
+#[derive(Debug,Clone)]
+struct FuncDef {
     function_name: String,
-    body:body,
+    body:Body,
     return_type: tokenizer::DataType,
-    parameter: Vec<var>,
+    parameter: Vec<Var>,
 }
-#[derive(Debug)]
-struct import {
+
+#[derive(Debug,Clone)]
+struct FuncCall {
+    function_name: String,
+    arguments: Vec<Node>,
+}
+
+#[derive(Debug,Clone)]
+struct MethodCall {
+    caller:Option<Box<Node>>,
+    method_name: String,
+    arguments: Vec<Node>,
+}
+
+#[derive(Debug,Clone)]
+struct Import {
     import_name: String,
     alias: Option<String>,
 }
@@ -48,8 +120,10 @@ pub struct ArkParser<'a> {
     tokenizer: tokenizer::Tokenizer<'a>,
     ast: Option<Box<Node>>,
     look_ahead: tokenizer::Token,
-    data_type_map: HashMap<String,DataType>
+    data_type_map: HashMap<String,DataType>,
+    iden_map: HashMap<String,Node>
 }
+
 impl<'a> ArkParser<'a> {
     pub fn new(source_code: &'a str) -> ArkParser<'a> {
         let mut parser_tokenizer = tokenizer::Tokenizer::new(source_code);
@@ -58,9 +132,12 @@ impl<'a> ArkParser<'a> {
             look_ahead: parser_tokenizer.get_next_token(),
             tokenizer: parser_tokenizer,
             ast: None,
-            data_type_map:HashMap::new<String,DataType>({
-                ("u8",DataType::U8)
-            }),
+            data_type_map:HashMap::from([
+                ("u8".to_owned(),DataType::U8),
+                ("u16".to_owned(),DataType::U16),
+            ]),
+            iden_map:HashMap::new(),
+            
         };
     }
 
@@ -73,9 +150,9 @@ impl<'a> ArkParser<'a> {
             Token::Keyword(keyword) =>{
                 let temp = self.look_ahead.clone();
                 if mem::discriminant(&self.look_ahead) == mem::discriminant(&expected) {
-                    match self.look_ahead{
+                    match &self.look_ahead{
                         Token::Keyword(look_ahead_key) => {
-                            if mem::discriminant(&look_ahead_key) == mem::discriminant(&keyword) {
+                            if mem::discriminant(look_ahead_key) == mem::discriminant(&keyword) {
                                 self.look_ahead = self.tokenizer.get_next_token();
                                 return temp;
                             }
@@ -113,58 +190,45 @@ impl<'a> ArkParser<'a> {
         
         
     }
-    fn parse_body(&mut self) -> body {
-        let mut scope_body = body {
+    fn parse_body(&mut self,stop_token:tokenizer::Token) -> Body {
+        let mut scope_body = Body {
             instructions: vec![],
         };
-        while self.look_ahead != Token::EOF {
+        while self.look_ahead != stop_token {
             let mut node:Node = match &self.look_ahead {
                 Token::Keyword(keyword) => {
                     match keyword {
                         KeyWords::FUNC => {
-                            return self.parse_function();
+                            println!("Parse func");
+                            self.parse_function()
                         },
                         KeyWords::IMPORT => {
-                            return self.parse_import();
+                            println!("Parse import");
+                            self.parse_import()
                         },
                         KeyWords::AS => {
                             panic!("unexpected keyword \"as\"");
                         },
                         KeyWords::CONST => {
-                            return self.parse_var_init();
+                            self.parse_iden_init()
                         },
                         KeyWords::RETURN => {
                             self.eat(Token::Keyword(KeyWords::RETURN));
-                            
+                            Node::Return(Some(Box::from(self.parse_primary())))
                         },
                     }
                 },
-                _ => {},
-                Token::Identifier(_) => todo!(),
-                Token::IntLiteral(_) => todo!(),
-                Token::FloatLiteral(_) => todo!(),
-                Token::StringLiteral(_) => todo!(),
-                Token::AdditionOperator => todo!(),
-                Token::SubtractionOperator => todo!(),
+                Token::Identifier(id) => {
+                    self.parse_iden()
+                },
+                Token::DataType(dt) => {
+                    println!("Parse var init");
+                    self.parse_iden_init()
+                }
                 Token::MultiplicationOperator => todo!(),
-                Token::DivisionOperator => todo!(),
-                Token::ModuloOperator => todo!(),
-                Token::AssignmentOperator => todo!(),
-                Token::Equal => todo!(),
-                Token::Less => todo!(),
-                Token::LessEqual => todo!(),
-                Token::More => todo!(),
-                Token::MoreEqual => todo!(),
-                Token::LeftParen => todo!(),
-                Token::RightParen => todo!(),
-                Token::LeftBrace => todo!(),
-                Token::RightBrace => todo!(),
-                Token::Comma => todo!(),
-                Token::Dot => todo!(),
-                Token::SemiColon => todo!(),
-                Token::EOF => todo!(),
-            }
-            scope_body.instructions.push(Box(node));
+                _ => {Node::Error("Unrecognize".to_string())},
+            };
+            scope_body.instructions.push(node);
         }
         return scope_body;
     }
@@ -175,7 +239,7 @@ impl<'a> ArkParser<'a> {
             let _import_as = self.eat(tokenizer::Token::Keyword(KeyWords::AS));
             let import_alias = self.eat(tokenizer::Token::Identifier(String::new()));
             let _import_semi = self.eat(tokenizer::Token::SemiColon);
-            return Node::Import(import {
+            return Node::Import(Import {
                 import_name: if let Token::StringLiteral(s) = import_name {
                     s
                 } else {
@@ -189,7 +253,7 @@ impl<'a> ArkParser<'a> {
             });
         }
         let _import_semi = self.eat(tokenizer::Token::SemiColon);
-        return Node::Import(import {
+        return Node::Import(Import {
             import_name: if let Token::StringLiteral(s) = import_name {
                 s
             } else {
@@ -198,7 +262,13 @@ impl<'a> ArkParser<'a> {
             alias: None,
         });
     }
-
+    fn parse_return(&mut self) -> Node {
+        self.eat(Token::Keyword(KeyWords::RETURN));
+        if self.expected(Token::SemiColon) {
+            return Node::Return(None);
+        }
+        return Node::Return(Some(Box::from(self.parse_primary())));
+    }
     
     fn parse_function(&mut self) -> Node {
         let _func_keyword = self.eat(tokenizer::Token::Keyword(KeyWords::FUNC));
@@ -214,24 +284,41 @@ impl<'a> ArkParser<'a> {
             }
             else{
                 DataType::Void
-            }
+            };
         }
         let _ = self.eat(tokenizer::Token::LeftBrace);
-        let function_body = self.parse_body();
+        
+        let function_body = if !self.expected(tokenizer::Token::RightBrace) {
+            self.parse_body(Token::RightBrace)
+        }
+        else{
+            Body {instructions:vec![]}
+        };
         let _ = self.eat(tokenizer::Token::RightBrace);
-        let _function_semi = self.eat(tokenizer::Token::SemiColon);
-        return Node::Function(func {
-            function_name: if let Token::Identifier(id) = func_name {
-                id
-            } else {
-                String::new()
-            },
-            body:function_body,
-            parameter:vec![],
-            return_type
-        });
+        let function_name = if let Token::Identifier(id) = func_name {
+            id
+        } else {
+            String::new()
+        };
+        self.iden_map.insert(function_name.clone(), Node::Function(
+            FuncDef {
+                function_name: function_name.clone(),
+                body:function_body.clone(),
+                parameter:vec![],
+                return_type:return_type.clone()
+            }
+        ));
+        return Node::Function(
+            FuncDef {
+                function_name: function_name.clone(),
+                body:function_body.clone(),
+                parameter:vec![],
+                return_type:return_type.clone()
+            }
+        );
+
     }
-    fn parse_var_init(&mut self) -> Node{
+    fn parse_iden_init(&mut self) -> Node{
         let mut constant = false;
         if self.expected(Token::Keyword(KeyWords::CONST)){
             self.eat(Token::Keyword(KeyWords::CONST));
@@ -251,59 +338,213 @@ impl<'a> ArkParser<'a> {
         else{
             String::new()
         };
-        return Node::Variable(var{constant,name:var_name,var_type:data_type})
-    }
-    pub fn parse(&mut self) {
-        let mut program = body {
-            instructions: vec![],
-        };
-        while self.look_ahead != Token::EOF {
-            let mut node:Node = match &self.look_ahead {
-                Token::Keyword(keyword) => {
-                    match keyword {
-                        KeyWords::FUNC => {
-                            return self.parse_function();
-                        },
-                        KeyWords::IMPORT => {
-                            return self.parse_import();
-                        },
-                        KeyWords::AS => {
-                            panic!("unexpected keyword \"as\"");
-                        },
-                        KeyWords::CONST => todo!(),
-                        KeyWords::RETURN => todo!(),
-                    }
-                },
-                _ => {},
-                Token::Identifier(_) => todo!(),
-                Token::IntLiteral(_) => todo!(),
-                Token::FloatLiteral(_) => todo!(),
-                Token::StringLiteral(_) => todo!(),
-                Token::AdditionOperator => todo!(),
-                Token::SubtractionOperator => todo!(),
-                Token::MultiplicationOperator => todo!(),
-                Token::DivisionOperator => todo!(),
-                Token::ModuloOperator => todo!(),
-                Token::AssignmentOperator => todo!(),
-                Token::Equal => todo!(),
-                Token::Less => todo!(),
-                Token::LessEqual => todo!(),
-                Token::More => todo!(),
-                Token::MoreEqual => todo!(),
-                Token::LeftParen => todo!(),
-                Token::RightParen => todo!(),
-                Token::LeftBrace => todo!(),
-                Token::RightBrace => todo!(),
-                Token::Comma => todo!(),
-                Token::Dot => todo!(),
-                Token::SemiColon => todo!(),
-                Token::EOF => todo!(),
-            }
-            program.instructions.push(Box(node));
+        println!("Inside init");
+        if self.expected(Token::AssignmentOperator){
+            let operator = self.eat(Token::AssignmentOperator);
+            let out = Node::Assignment(BinExp 
+                {
+                    left: Some(
+                        Box::from(
+                            Node::DeclareVar(
+                                Var{
+                                    constant,
+                                    name:var_name,
+                                    var_type:data_type
+                                }
+                            )
+                        )
+                    ),
+                    right: Some(Box::from(self.parse_primary())),
+                    operator
+                }
+            );
+            self.eat(Token::SemiColon);
+            return out; 
         }
+        self.eat(Token::SemiColon);
+        let v = Var{
+            constant,
+            name:var_name,
+            var_type:data_type
+        };
+        self.iden_map.insert(v.name.clone(), Node::DeclareVar(
+            v.clone()
+        ));
+        return Node::DeclareVar(
+            v.clone()
+        );
+    }
 
-        self.ast = Some(Box::new(self.parse_import()));
-        println!("{:?}", self.ast);
+    fn parse_iden(&mut self) -> Node{
+        let iden_token = self.eat(Token::Identifier(String::new()));
+        let iden = if let Token::Identifier(id) = iden_token {
+            id
+        }
+        else{
+            String::new()
+        };
+        match &self.look_ahead{
+            Token::LeftParen => {
+                let mut func_call = FuncCall {function_name:iden, arguments:vec![]};
+                self.eat(Token::LeftParen);
+                while !self.expected(Token::RightParen){
+                    func_call.arguments.push(self.parse_primary());
+                    if self.expected(Token::Comma) {
+                        self.eat(Token::Comma);
+                    }
+                }
+                self.eat(Token::RightParen);
+                self.eat(Token::SemiColon);
+                Node::FunctionCall(func_call)
+            },
+            Token::AssignmentOperator => {
+                let operator = self.eat(Token::AssignmentOperator);
+                let out = Node::Assignment(BinExp {
+                    left: Some(Box::from(Node::Variable(iden))),
+                    right: Some(Box::from(self.parse_primary())), 
+                    operator
+                });
+                self.eat(Token::SemiColon);
+                out
+            },
+            Token::Dot => {
+                let mut caller = self.iden_map.get(&iden).unwrap().clone();
+                while self.expected(Token::Dot) {
+                    self.eat(Token::Dot);
+                    let method_token = self.eat(Token::Identifier(String::new()));
+                    let method_iden = if let Token::Identifier(id) = method_token {
+                        id
+                    }
+                    else{
+                        String::new()
+                    };
+                    let mut method_call = MethodCall { caller: None, method_name: method_iden, arguments: vec![] };
+                    self.eat(Token::LeftParen);
+                    while !self.expected(Token::RightParen) {
+                        method_call.arguments.push(self.parse_primary());
+                        if self.expected(Token::Comma) {
+                            self.eat(Token::Comma);
+                        }
+                    }
+                    self.eat(Token::RightParen);
+                    method_call.caller = Some(Box::from(caller));
+                    caller = Node::MethodCall(method_call);
+                    
+                }
+                self.eat(Token::SemiColon);
+                caller
+            },
+            _ => Node::Variable(iden),
+        }
+    }
+
+    fn parse_primary(&mut self) -> Node {
+        let mut left:Node = match &self.look_ahead.clone() {
+            Token::Identifier(_) => {
+                self.parse_iden()
+            },
+            Token::IntLiteral(i) => {
+                self.eat(Token::IntLiteral(0));
+                println!("Found Int Literal");
+                Node::Literal(LiteralValue::Int(*i))
+            },
+            Token::FloatLiteral(f) => {
+                self.eat(Token::FloatLiteral(0.0));
+                Node::Literal(LiteralValue::Float(*f))
+            },
+            Token::StringLiteral(s) => {
+                self.eat(Token::StringLiteral(String::new()));
+                Node::Literal(LiteralValue::Str(s.clone()))
+            },
+            _ => {
+                Node::Error("Expected value after return keyword".to_string())
+            },
+        };
+        while self.expected(Token::AdditionOperator) || self.expected(Token::SubtractionOperator){
+            let operator = self.eat(self.look_ahead.clone());
+            let right:Node = match &self.look_ahead.clone() {
+                Token::Identifier(id) => {
+                    self.eat(Token::Identifier(String::new()));
+                    Node::Variable(id.to_owned())
+                },
+                Token::IntLiteral(i) => {
+                    self.eat(Token::IntLiteral(0));
+                    Node::Literal(LiteralValue::Int(*i))
+                },
+                Token::FloatLiteral(f) => {
+                    self.eat(Token::FloatLiteral(0.0));
+                    Node::Literal(LiteralValue::Float(*f))
+                },
+                Token::StringLiteral(s) => {
+                    self.eat(Token::StringLiteral(String::new()));
+                    Node::Literal(LiteralValue::Str(s.clone()))
+                },
+                _ => {
+                    Node::Error("Expected value after return keyword".to_string())
+                },
+            };
+            left = Node::BinaryExpression(BinExp { left:Some(Box::from(left)), right:Some(Box::from(right)), operator });
+        }
+        return left;
+    }
+
+    fn parse_factor(&mut self) -> Node {
+        let mut left:Node = match &self.look_ahead.clone() {
+            Token::Identifier(id) => {
+                self.eat(Token::Identifier(String::new()));
+                Node::Variable(id.to_owned())
+            },
+            Token::IntLiteral(i) => {
+                self.eat(Token::IntLiteral(0));
+                Node::Literal(LiteralValue::Int(*i))
+            },
+            Token::FloatLiteral(f) => {
+                self.eat(Token::FloatLiteral(0.0));
+                Node::Literal(LiteralValue::Float(*f))
+            },
+            Token::StringLiteral(s) => {
+                self.eat(Token::StringLiteral(String::new()));
+                Node::Literal(LiteralValue::Str(s.clone()))
+            },
+            _ => {
+                Node::Error("Expected value after return keyword".to_string())
+            },
+        };
+        while self.expected(Token::MultiplicationOperator) || self.expected(Token::DivisionOperator){
+            let operator = self.eat(self.look_ahead.clone());
+            let right:Node = match &self.look_ahead.clone() {
+                Token::Identifier(id) => {
+                    self.eat(Token::Identifier(String::new()));
+                    Node::Variable(id.to_owned())
+                },
+                Token::IntLiteral(i) => {
+                    self.eat(Token::IntLiteral(0));
+                    Node::Literal(LiteralValue::Int(*i))
+                },
+                Token::FloatLiteral(f) => {
+                    self.eat(Token::FloatLiteral(0.0));
+                    Node::Literal(LiteralValue::Float(*f))
+                },
+                Token::StringLiteral(s) => {
+                    self.eat(Token::StringLiteral(String::new()));
+                    Node::Literal(LiteralValue::Str(s.clone()))
+                },
+                _ => {
+                    Node::Error("Expected value after return keyword".to_string())
+                },
+            };
+            left = Node::BinaryExpression(BinExp { left:Some(Box::from(left)), right:Some(Box::from(right)), operator });
+        }
+        return left;
+        
+    }
+
+    pub fn parse(&mut self) {
+        let program = self.parse_body(Token::EOF);
+
+
+        // self.ast = Some(Box::new(self.parse_import()));
+        println!("{:?}", program);
 
         // while !self.tokenizer.is_finished(){
         //     let token = self.tokenizer.get_next_token();
@@ -398,5 +639,9 @@ impl<'a> ArkParser<'a> {
         //         },
         //     }
         // }
+    }
+
+    fn parse_format(&mut self){
+        let program = self.parse_body(Token::EOF);
     }
 }

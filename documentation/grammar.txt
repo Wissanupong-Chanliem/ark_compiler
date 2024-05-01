@@ -1,9 +1,9 @@
 function = func <Identifier>() [: <datatype>]{}
 import = import <string_literal> [as <Identifier>];
-const = const <datatype> <Identifier> = <literal|Identifier|BinExp>;
-return = return <literal|Identifier|BinExp>;
+const = const <datatype> <Identifier> = <PimaryExpression>;
+return = return <PimaryExpression>;
 <datatype> <Identifier>;
-<datatype> <Identifier> = <literal|Identifier|BinExp>;
+<datatype> <Identifier> = <PimaryExpression>;
 
 rule:
 PimaryExpression = <literal|Identifier|BinExp>;

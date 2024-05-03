@@ -8,12 +8,29 @@ pub enum KeyWords{
     IMPORT,
     AS,
     CONST,
-    FOR,
-    WHILE,
-    IF,
-    ELSE,
-    ELSEIF,
     RETURN
+}
+
+impl KeyWords {
+    fn clone(&self) -> KeyWords {
+        match self{
+            KeyWords::FUNC=>{
+                KeyWords::FUNC
+            },
+            KeyWords::IMPORT=>{
+                KeyWords::IMPORT
+            },
+            KeyWords::AS=>{
+                KeyWords::AS
+            },
+            KeyWords::CONST=>{
+                KeyWords::CONST
+            },
+            KeyWords::RETURN=>{
+                KeyWords::RETURN
+            },
+        }
+    }
 }
 
 #[derive(Debug,PartialEq,Clone)]
@@ -33,6 +50,62 @@ pub enum DataType{
     Boolean,
 }
 
+impl DataType{
+    pub fn to_string(&self) -> String{
+        match self{
+            DataType::Void => "void",
+            DataType::I8 => "i8",
+            DataType::I16 => "i16",
+            DataType::I32 => "i32",
+            DataType::I64 => "i64",
+            DataType::U8 => "u8",
+            DataType::U16 => "u16",
+            DataType::U32 => "u32",
+            DataType::U64 => "u64",
+            DataType::F32 => "f32",
+            DataType::F64 => "f64",
+            DataType::String => "string",
+            DataType::Boolean => "bool",
+        }.to_string()
+    }
+    pub fn to_c_type_string(&self) -> String{
+        match self{
+            DataType::Void => "void",
+            DataType::I8 => "int8_t",
+            DataType::I16 => "int16_t",
+            DataType::I32 => "int32_t",
+            DataType::I64 => "int64_t",
+            DataType::U8 => "uint8_t",
+            DataType::U16 => "uint16_t",
+            DataType::U32 => "uint32_t",
+            DataType::U64 => "uint64_t",
+            DataType::F32 => "float",
+            DataType::F64 => "double",
+            DataType::String => "char[]",
+            DataType::Boolean => "bool",
+        }.to_string()
+    }
+}
+
+// impl DataType {
+//     pub fn clone(&self) -> DataType {
+//         match self{
+//             DataType::Void => {DataType::Void},
+//             DataType::I8 => {DataType::I8},
+//             DataType::I16 => {DataType::I16},
+//             DataType::I32 => {DataType::I32},
+//             DataType::I64 => {DataType::I64},
+//             DataType::U8 => {DataType::U8},
+//             DataType::U16 => {DataType::U16},
+//             DataType::U32 => {DataType::U32},
+//             DataType::U64 => {DataType::U64},
+//             DataType::F32 => {DataType::F32},
+//             DataType::F64 => {DataType::F64},
+//             DataType::String => {DataType::String},
+//             DataType::Boolean => {DataType::Boolean},
+//         }
+//     }
+// }
 
 #[derive(Debug,PartialEq,Clone)]
 pub enum Token{
@@ -64,6 +137,40 @@ pub enum Token{
     SemiColon,
     EOF
 }
+
+// impl Token{
+//     pub fn clone(&self) -> Token{
+//         match self{
+//             Token::Keyword(keyword) => {Token::Keyword(keyword.clone())},
+//             Token::DataType(data_type) => {Token::DataType(data_type.clone())},
+//             Token::Identifier(id) => {Token::Identifier(id.to_owned())},
+//             Token::IntLiteral(i) => {Token::IntLiteral(i.to_owned())},
+//             Token::FloatLiteral(f) => {Token::FloatLiteral(f.to_owned())},
+//             Token::StringLiteral(s) => {Token::StringLiteral(s.to_owned())},
+//             Token::AdditionOperator => {Token::AdditionOperator},
+//             Token::SubtractionOperator => {Token::SubtractionOperator},
+//             Token::MultiplicationOperator => {Token::MultiplicationOperator},
+//             Token::DivisionOperator => {Token::DivisionOperator},
+//             Token::ModuloOperator => {Token::ModuloOperator},
+//             Token::AssignmentOperator => {Token::AssignmentOperator},
+//             Token::ScopeResolution => {Token::ScopeResolution},
+//             Token::Colon => {Token::Colon},
+//             Token::Equal => {Token::Equal},
+//             Token::Less => {Token::Less},
+//             Token::LessEqual => {Token::LessEqual},
+//             Token::More => {Token::More},
+//             Token::MoreEqual => {Token::MoreEqual},
+//             Token::LeftParen => {Token::LeftParen},
+//             Token::RightParen => {Token::RightParen},
+//             Token::LeftBrace => {Token::LeftBrace},
+//             Token::RightBrace => {Token::RightBrace},
+//             Token::Comma => {Token::Comma},
+//             Token::Dot => {Token::Dot},
+//             Token::SemiColon => {Token::SemiColon},
+//             Token::EOF => {Token::EOF},
+//         }
+//     }
+// }
 
 pub enum GroupToken{
     LeftParen,
@@ -107,16 +214,14 @@ impl<'a> Tokenizer<'a>{
             cursor:0,
             source:source_code,
             rules:vec![
+                
+
                 (Regex::new(r"\Afunc\s").unwrap(),Token::Keyword(KeyWords::FUNC)),
                 (Regex::new(r"\Aimport\s").unwrap(),Token::Keyword(KeyWords::IMPORT)),
                 (Regex::new(r"\Aas\s").unwrap(),Token::Keyword(KeyWords::AS)),
                 (Regex::new(r"\Aconst\s").unwrap(),Token::Keyword(KeyWords::CONST)),
                 (Regex::new(r"\Areturn\s").unwrap(),Token::Keyword(KeyWords::RETURN)),
-                (Regex::new(r"\Awhile\s").unwrap(),Token::Keyword(KeyWords::WHILE)),
-                (Regex::new(r"\Afor\s").unwrap(),Token::Keyword(KeyWords::FOR)),
-                (Regex::new(r"\Aif[\s(]").unwrap(),Token::Keyword(KeyWords::IF)),
-                (Regex::new(r"\Aelse[\s(]").unwrap(),Token::Keyword(KeyWords::ELSE)),
-                (Regex::new(r"\Aelse\s+if[\s(]").unwrap(),Token::Keyword(KeyWords::ELSEIF)),
+                (Regex::new(r#"\A".*""#).unwrap(),Token::StringLiteral(String::new())),
                 (Regex::new(r"\Ai8\W").unwrap(),Token::DataType(DataType::I8)),
                 (Regex::new(r"\Ai16\W").unwrap(),Token::DataType(DataType::I16)),
                 (Regex::new(r"\Ai32\W").unwrap(),Token::DataType(DataType::I32)),

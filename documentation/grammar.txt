@@ -8,3 +8,6 @@ return = return <PimaryExpression>;
 rule:
 PimaryExpression = <literal|Identifier|BinExp>;
 BinExp = <PimaryExpression> <Operator> <PimaryExpression>
+PimaryExpression = Term (+- Term)
+Term = Factor (*/ Factor)
+Factor (literal),(PimaryExpression),(+-)literal,(+-)(PimaryExpression)

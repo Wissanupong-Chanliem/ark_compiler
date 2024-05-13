@@ -1,7 +1,5 @@
-pub mod tokenizer;
-
-use crate::tokenizer::{Tokenizer,DataType, KeyWords, Token};
-use std::{collections::HashMap, mem};
+use crate::{symbol_table::{self, SymbolTable}, tokenizer::{self, DataType, KeyWords, Token, TokenType, Tokenizer}, ErrorPipeline, ErrorType};
+use std::{mem};
 
 
 #[derive(Debug,Clone)]
@@ -16,472 +14,1510 @@ pub enum Node {
     FunctionCall(FuncCall),
     MethodCall(MethodCall),
     Import(Import),
-    Return(Option<Box<Node>>),
-    Error(String),
+    Return(Option<Box<AstNode<Node>>>),
+    Conditional(ConditionalBlock),
+    For(ForLoop),
+    While(WhileLoop),
+    BooleanNot(NotExp),
+    Tuple(TupleBody),
+    Range(Range),
+    ParserError(ParserError),
+}
+
+#[derive(Debug,Clone)]
+pub struct AstNode <T> {
+    pub node: T,
+    pub pos: (u32,u32),
+    pub length: u32,
+}
+
+impl<T> AstNode<T>{
+    pub fn new(node:T,pos:(u32,u32),length: u32) -> AstNode<T>{
+        AstNode { node,pos, length }
+    }
+}
+
+#[derive(Debug,Clone)]
+pub struct ParserError {
+    pub error_type:ErrorType,
+    pub error_message:String,
+    pub pos:(u32,u32)
+}
+
+
+// #[derive(Debug,Clone)]
+// pub enum ErrorType {
+//     SemanticError,
+//     SyntaxError
+// }
+
+// impl ErrorType{
+//     pub fn as_str(&self) -> &str{
+//         match self {
+//             ErrorType::SemanticError => "Sematic Error",
+//             ErrorType::SyntaxError => "Syntax Error",
+//         }
+//     }
+// }
+
+impl ParserError{
+    pub fn new(error_type:ErrorType,error_message:&str,error_pos:(u32,u32)) -> ParserError{
+        ParserError {
+            error_type,
+            error_message:String::from(error_message),
+            pos:error_pos,
+        }
+    }
 }
 
 #[derive(Debug,Clone)]
 pub enum LiteralValue {
-    Int(i32),
+    Int(i64),
     Float(f64),
     Str(String)
 }
 
+
 #[derive(Debug,Clone)]
 pub struct Body {
-    pub instructions: Vec<Node>,
+    pub instructions: Vec<AstNode<Node>>,
+}
+
+#[derive(Debug,Clone)]
+pub struct ConditionalBlock{
+    pub if_block:(Box<AstNode<Node>>,Body),
+    pub elif_block:Vec<(AstNode<Node>,Body)>,
+    pub else_block:Option<Body>,
+}
+
+#[derive(Debug,Clone)]
+pub struct Range{
+    pub start:Box<AstNode<Node>>,
+    pub end:Box<AstNode<Node>>,
+}
+
+#[derive(Debug,Clone)]
+pub struct ForLoop{
+    pub var:Option<Box<AstNode<Node>>>,
+    pub range:Box<AstNode<Node>>,
+    pub body:Body,
+}
+
+#[derive(Debug,Clone)]
+pub struct WhileLoop{
+    pub condition:Box<AstNode<Node>>,
+    pub body:Body,
+}
+
+#[derive(Debug,Clone)]
+pub struct TupleBody {
+    pub members: Vec<AstNode<Node>>,
 }
 
 #[derive(Debug,Clone)]
 pub struct BinExp {
-    pub left: Box<Node>,
-    pub right: Box<Node>,
-    pub operator: Token,
+    pub left: Box<AstNode<Node>>,
+    pub right: Box<AstNode<Node>>,
+    pub operator: TokenType,
+    //pub pos:(u32,u32)
+}
+
+
+#[derive(Debug,Clone)]
+pub struct NotExp {
+    pub exp: Box<AstNode<Node>>
 }
 
 #[derive(Debug,Clone)]
 pub struct Var {
-    pub constant:bool,
-    pub name: String,
-    pub var_type: DataType,
+    pub constant:Option<AstNode<bool>>,
+    pub name: AstNode<String>,
+    pub var_type: AstNode<DataType>,
 }
 
 #[derive(Debug,Clone)]
 pub struct FuncDef {
-    pub function_name: String,
+    pub function_name: AstNode<String>,
     pub body:Body,
-    pub return_type: DataType,
-    pub parameter: Vec<Var>,
+    pub return_type: AstNode<DataType>,
+    pub parameters: Vec<AstNode<Var>>,
 }
 
 #[derive(Debug,Clone)]
 pub struct FuncCall {
-    pub function_name: String,
-    pub arguments: Vec<Node>,
+    pub function_name: AstNode<String>,
+    pub arguments: Vec<AstNode<Node>>,
 }
 
 #[derive(Debug,Clone)]
 pub struct MethodCall {
-    pub caller:Option<Box<Node>>,
-    pub method_name: String,
-    pub arguments: Vec<Node>,
+    pub caller:Option<Box<AstNode<Node>>>,
+    pub method_name: AstNode<String>,
+    pub arguments: Vec<AstNode<Node>>,
 }
+
 
 #[derive(Debug,Clone)]
 pub struct Import {
-    pub import_name: String,
-    pub alias: Option<String>,
+    pub import_name: AstNode<String>,
+    pub alias: Option<AstNode<String>>,
 }
 
-pub struct ArkParser<'a> {
-    tokenizer: Tokenizer<'a>,
+pub struct ArkParser<'source,'error_pipe,'tokenizer> {
+    tokenizer: &'tokenizer mut Tokenizer<'source,'error_pipe>,
     look_ahead: Token,
-    data_type_map: HashMap<String,DataType>,
-    iden_map: HashMap<String,Node>
+    err_pipe:&'error_pipe ErrorPipeline,
 }
 
-impl<'a> ArkParser<'a> {
-    pub fn new(source_code: &'a str) -> ArkParser<'a> {
-        let mut parser_tokenizer = Tokenizer::new(source_code);
-        
+impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
+    pub fn new(tokenizer:&'tokenizer mut Tokenizer<'source,'error_pipe>,error_pipe: &'error_pipe ErrorPipeline) -> ArkParser<'source,'error_pipe,'tokenizer> {
         return ArkParser {
-            look_ahead: parser_tokenizer.get_next_token(),
-            tokenizer: parser_tokenizer,
-            data_type_map:HashMap::from([
-                ("u8".to_owned(),DataType::U8),
-                ("u16".to_owned(),DataType::U16),
-            ]),
-            iden_map:HashMap::new(),
-            
+            look_ahead: tokenizer.get_next_token(),
+            tokenizer,
+            err_pipe:error_pipe,
         };
     }
 
-    fn expected(&mut self, expected: Token) -> bool {
-        return self.look_ahead == expected;
-    }
-
-    fn eat(&mut self, expected: Token) -> Token {
+    fn expected(&mut self, expected: &TokenType) -> bool {
         match expected{
-            Token::Keyword(keyword) =>{
-                let temp = self.look_ahead.clone();
-                if mem::discriminant(&self.look_ahead) == mem::discriminant(&expected) {
-                    match &self.look_ahead{
-                        Token::Keyword(look_ahead_key) => {
-                            if mem::discriminant(look_ahead_key) == mem::discriminant(&keyword) {
-                                self.look_ahead = self.tokenizer.get_next_token();
-                                return temp;
-                            }
-                            panic!(
-                                "Unexpected token of type {:?} (expected: {:?})",
-                                temp, expected
-                            );
+            TokenType::Keyword(keyword) =>{
+                if mem::discriminant(&self.look_ahead.token) == mem::discriminant(expected) {
+                    match &self.look_ahead.token{
+                        TokenType::Keyword(look_ahead_key) => {
+                            return mem::discriminant(look_ahead_key) == mem::discriminant(&keyword);
                         },
                         _ => {
-                            panic!(
-                                "Unexpected token of type {:?} (expected: {:?})",
-                                temp, expected
-                            );
+                            return false;
                         },
                     }
                     
                 }
-                panic!(
-                    "Unexpected token of type {:?} (expected: {:?})",
-                    temp, expected
-                );
+                return false;
             },
             _ => {
-                let temp = self.look_ahead.clone();
-                if mem::discriminant(&temp) == mem::discriminant(&expected) {
-                    self.look_ahead = self.tokenizer.get_next_token();
-                    return temp;
-                }
-                panic!(
-                    "Unexpected token of type {:?} (expected: {:?})",
-                    temp, expected
-                );
+                return mem::discriminant(&self.look_ahead.token) == mem::discriminant(expected);
             }
         }
+        //return self.look_ahead.token == expected;
+    }
+
+    fn eat(&mut self, expected: &TokenType,error_message:&str) -> Result<AstNode<TokenType>,AstNode<Node>> {
+        let pos = self.look_ahead.pos;
+        let length = self.look_ahead.length;
         
+        match expected{
+            TokenType::Keyword(keyword) =>{
+                let node = self.look_ahead.token.clone();
+                if mem::discriminant(&self.look_ahead.token) == mem::discriminant(&expected) {
+                    match &self.look_ahead.token{
+                        TokenType::Keyword(look_ahead_key) => {
+                            if mem::discriminant(look_ahead_key) == mem::discriminant(keyword) {
+                                self.look_ahead = self.tokenizer.get_next_token();
+                                return Ok(AstNode::new(node, pos, length));
+                            }
+                            // else{
+                            //     self.raise_error(error_message);
+                            //     self.look_ahead = self.tokenizer.get_next_token();
+                            //     return Ok(AstNode::new(expected.clone(), pos, length));
+                            // }
+                            
+                        },
+                        _ => {
+                            // self.raise_error(error_message);
+                            // self.look_ahead = self.tokenizer.get_next_token();
+                            // return Ok(AstNode::new(expected.clone(), pos, length));
+                        },
+                    }
+                    
+                }
+            },
+            _ => {
+                let node = self.look_ahead.token.clone();
+                if mem::discriminant(&node) == mem::discriminant(expected) {
+                    self.look_ahead = self.tokenizer.get_next_token();
+                    return Ok(AstNode::new(node, pos, length));
+                }
+                // else{
+                //     self.raise_error( error_message);
+                //     self.look_ahead = self.tokenizer.get_next_token();
+                //     return Ok(AstNode::new(expected.clone(), pos, length));
+                // }
+            }
+        }
+        //println!("expected: {:#?} founded: {:#?}",expected,self.look_ahead);
+        //self.look_ahead = self.tokenizer.get_next_token();
+        //self.skip_until_delim();
+        return Err(
+            AstNode { node: Node::ParserError(self.raise_error(error_message)), pos, length }
+        );
         
     }
-    fn parse_body(&mut self,stop_token:Token) -> Body {
+    fn skip_until(&mut self,delimiter:&TokenType){
+        
+        while !self.expected(delimiter) && !self.expected(&TokenType::EOF) {
+            //println!("current: {:#?}",self.look_ahead);
+            self.look_ahead = self.tokenizer.get_next_token();
+        }
+    }
+    fn skip_block(&mut self){
+        let mut s: Vec<bool> = vec![];
+        if self.expected(&TokenType::LeftBrace){
+            s.push(true);
+            let open = self.eat(&TokenType::LeftBrace, "expected open brace").unwrap();
+            while !s.is_empty(){
+                self.look_ahead = self.tokenizer.get_next_token();
+                
+                if self.expected(&TokenType::EOF){
+                    self.err_pipe.raise_error(
+                        ErrorType::SyntaxError,
+                        "unclosed brace",
+                        open.pos,
+                        open.length
+                    );
+                    break;
+                }
+                else if self.expected(&TokenType::LeftBrace){
+                    s.push(true);
+                }
+                else if self.expected(&TokenType::RightBrace){
+                    s.pop();
+                }
+                //println!("current: {:#?}",self.look_ahead);
+            }
+        }
+    }
+    fn raise_error(&mut self,error_message:&str) -> ParserError {
+        
+        let error_pos = self.look_ahead.pos;
+        self.err_pipe.raise_error(crate::ErrorType::SyntaxError, error_message, error_pos, 1);
+
+        let err = ParserError::new(
+            ErrorType::SyntaxError,
+            error_message,
+            error_pos
+        );
+        //self.syntax_errors.push(err.clone());
+        //self.look_ahead = self.tokenizer.get_next_token();
+        err
+    }
+    fn parse_block(&mut self) -> Body {
+        
         let mut scope_body = Body {
             instructions: vec![],
         };
-        while self.look_ahead != stop_token {
-            let node:Node = match &self.look_ahead {
-                Token::Keyword(keyword) => {
+        let l_brace = self.eat(&TokenType::LeftBrace, "expected a block").unwrap();
+        while !self.expected(&TokenType::RightBrace) {
+            
+            let node:AstNode<Node> = match self.look_ahead.token {
+                
+                TokenType::Keyword(keyword) => {
+                    
                     match keyword {
                         KeyWords::FUNC => {
-                            self.parse_function()
+
+                            let func = self.parse_function();
+                            println!("{:#?}",&func);
+                            func
                         },
                         KeyWords::IMPORT => {
                             self.parse_import()
                         },
-                        KeyWords::AS => {
-                            panic!("unexpected keyword \"as\"");
+                        KeyWords::AS => AstNode {
+                            node: Node::ParserError(
+                                self.raise_error(
+                                    "expected token 'import' before 'sources' token"
+                                )
+                            ),
+                            length:self.look_ahead.length,
+                            pos:self.look_ahead.pos
                         },
                         KeyWords::CONST => {
-                            self.parse_iden_init()
+                            self.parse_iden_init(true)
+                        },
+                        KeyWords::LET => {
+                            self.parse_iden_init(false)
                         },
                         KeyWords::RETURN => {
                             self.parse_return()
                         },
+                        KeyWords::FOR => {
+                            self.parse_for()
+                        },
+                        KeyWords::WHILE => self.parse_while(),
+                        KeyWords::IF => self.parse_condition(),
+                        KeyWords::ELSEIF => {
+                            let er = self.raise_error(
+                                "expected token 'if' before 'else if' token",
+                            );
+                            AstNode::new(
+                                Node::ParserError(
+                                    er.clone()
+                                ),
+                                er.pos,
+                                0
+                            )
+                        },
+                        KeyWords::ELSE => {
+                            let er = self.raise_error(
+                                "expected token 'if' before 'else' token",
+                            );
+                            AstNode::new(
+                                Node::ParserError(
+                                    er.clone()
+                                ),
+                                er.pos,
+                                0
+                            )
+                        },
+                        KeyWords::IN => {
+                            let er = self.raise_error(
+                                "expected identifier or tuple of identifier before 'in' token",
+                            );
+                            AstNode::new(
+                                Node::ParserError(
+                                    er.clone()
+                                ),
+                                er.pos,
+                                0
+                            )
+                        },
                     }
                 },
-                Token::Identifier(_) => {
+                TokenType::Identifier(_) => {
                     self.parse_iden()
                 },
-                Token::DataType(_) => {
-                    self.parse_iden_init()
-                }
-                Token::MultiplicationOperator => todo!(),
-                _ => {Node::Error("Unrecognize".to_string())},
+                TokenType::MultiplicationOperator => {todo!()},
+                TokenType::And => {
+                    let er = self.raise_error(
+                        "expected identifier or expression before '&&' token",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                TokenType::Or => {
+                    let er = self.raise_error(
+                        "expected identifier or expression before '||' token",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                TokenType::RightParen => {
+                    let er = self.raise_error(
+                        "unmatched parenthesis",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                TokenType::RightBrace => {
+                    let er = self.raise_error(
+                        "unmatched brace",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                TokenType::EOF => {
+                    //let _er = self.raise_error("unclosed brace");
+                    self.err_pipe.raise_error(crate::ErrorType::SyntaxError, "unclosed brace", l_brace.pos, 1);
+                    break;
+                },
+                _ => {
+                    println!("{:#?}",self.look_ahead.token);
+                    todo!();
+                },
+            };
+            scope_body.instructions.push(node);
+            println!("{:#?}",scope_body.instructions);
+        }
+        
+        if self.expected(&TokenType::RightBrace) {
+            let _ = self.eat(&TokenType::RightBrace, "unclosed brace");
+        }
+        return scope_body;
+    }
+
+    fn parse_body(&mut self,stop_token:TokenType) -> Body {
+        let mut scope_body = Body {
+            instructions: vec![],
+        };
+        
+        while !self.expected(&stop_token) {
+            
+            let node:AstNode<Node> = match self.look_ahead.token {
+                
+                TokenType::Keyword(keyword) => {
+                    
+                    match keyword {
+                        KeyWords::FUNC => {
+                            
+                            let a = self.parse_function();
+                            println!("{:#?}",&a);
+                            a
+                        },
+                        KeyWords::IMPORT => {
+                            self.parse_import()
+                        },
+                        KeyWords::AS => AstNode {
+                            node: Node::ParserError(
+                                self.raise_error(
+                                    "expected token 'import' before 'sources' token"
+                                )
+                            ),
+                            length:self.look_ahead.length,
+                            pos:self.look_ahead.pos
+                        },
+                        KeyWords::CONST => {
+                            self.parse_iden_init(true)
+                        },
+                        KeyWords::LET => {
+                            self.parse_iden_init(false)
+                        },
+                        KeyWords::RETURN => {
+                            self.parse_return()
+                        },
+                        KeyWords::FOR => {
+                            self.parse_for()
+                        },
+                        KeyWords::WHILE => self.parse_while(),
+                        KeyWords::IF => self.parse_condition(),
+                        KeyWords::ELSEIF => {
+                            let er = self.raise_error(
+                                "expected token 'if' before 'else if' token",
+                            );
+                            AstNode::new(
+                                Node::ParserError(
+                                    er.clone()
+                                ),
+                                er.pos,
+                                0
+                            )
+                        },
+                        KeyWords::ELSE => {
+                            let er = self.raise_error(
+                                "expected token 'if' before 'else' token",
+                            );
+                            AstNode::new(
+                                Node::ParserError(
+                                    er.clone()
+                                ),
+                                er.pos,
+                                0
+                            )
+                        },
+                        KeyWords::IN => {
+                            let er = self.raise_error(
+                                "expected identifier or tuple of identifier before 'in' token",
+                            );
+                            AstNode::new(
+                                Node::ParserError(
+                                    er.clone()
+                                ),
+                                er.pos,
+                                0
+                            )
+                        },
+                    }
+                },
+                TokenType::Identifier(_) => {
+                    
+                    self.parse_iden()
+                },
+                TokenType::MultiplicationOperator => {todo!()},
+                TokenType::And => {
+                    let er = self.raise_error(
+                        "expected identifier or expression before '&&' token",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                TokenType::Or => {
+                    let er = self.raise_error(
+                        "expected identifier or expression before '||' token",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                TokenType::RightParen => {
+                    let er = self.raise_error(
+                        "unmatched parenthesis",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                TokenType::RightBrace => {
+                    let er = self.raise_error(
+                        "unmatched brace",
+                    );
+                    AstNode::new(
+                        Node::ParserError(
+                            er.clone()
+                        ),
+                        er.pos,
+                        0
+                    )
+                },
+                _ => {
+                    println!("{:#?}",self.look_ahead.token);
+                    todo!();
+                },
             };
             scope_body.instructions.push(node);
         }
         return scope_body;
     }
-    fn parse_import(&mut self) -> Node {
-        let _import_keyword = self.eat(Token::Keyword(KeyWords::IMPORT));
-        let import_name = self.eat(Token::StringLiteral(String::new()));
-        if self.expected(Token::Keyword(KeyWords::AS)) {
-            let _import_as = self.eat(Token::Keyword(KeyWords::AS));
-            let import_alias = self.eat(Token::Identifier(String::new()));
-            let _import_semi = self.eat(Token::SemiColon);
-            return Node::Import(Import {
-                import_name: if let Token::StringLiteral(s) = import_name {
-                    s
-                } else {
-                    String::new()
-                },
-                alias: if let Token::Identifier(id) = import_alias {
-                    Some(id)
-                } else {
-                    None
-                },
-            });
-        }
-        let _import_semi = self.eat(Token::SemiColon);
-        return Node::Import(Import {
-            import_name: if let Token::StringLiteral(s) = import_name {
-                s
+    fn parse_import(&mut self) -> AstNode<Node> {
+        let import_keyword = match self.eat(&TokenType::Keyword(KeyWords::IMPORT),"") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let import_name = match self.eat(&TokenType::StringLiteral(String::new()),"expected import name after 'import'") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let name = if let TokenType::StringLiteral(s) = import_name.node {
+            s
+        } else {
+            String::new()
+        };
+        if self.expected(&TokenType::Keyword(KeyWords::AS)) {
+            let _import_as = match self.eat(&TokenType::Keyword(KeyWords::AS),"")  {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            let import_alias = match self.eat(&TokenType::Identifier(String::new()),"expected identifier after 'sources'") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            let _import_semi = match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            
+            let alias = if let TokenType::Identifier(id) = import_alias.node {
+                id
             } else {
                 String::new()
-            },
-            alias: None,
-        });
-    }
-    fn parse_return(&mut self) -> Node {
-        self.eat(Token::Keyword(KeyWords::RETURN));
-        if self.expected(Token::SemiColon) {
-            self.eat(Token::SemiColon);
-            return Node::Return(None);
-        }
-        
-        let val = Node::Return(Some(Box::from(self.parse_primary())));
-        self.eat(Token::SemiColon);
-        val
-    }
-    fn parse_function(&mut self) -> Node {
-        let _func_keyword = self.eat(Token::Keyword(KeyWords::FUNC));
-        let func_name = self.eat(Token::Identifier(String::new()));
-        let _ = self.eat(Token::LeftParen);
-        let mut parameters: Vec<Var> = vec![];
-        while !self.expected(Token::RightParen){
-            let para_type_t = self.eat(Token::DataType(DataType::Void));
-            let para_type = if let Token::DataType(data_type) = para_type_t {
-                data_type
-            }
-            else{
-                DataType::Void
             };
-            let para_name_t = self.eat(Token::Identifier(String::new()));
-            let para_name = if let Token::Identifier(id) = para_name_t {
+            return AstNode {
+                node:
+                Node::Import(Import {
+                    import_name: AstNode { node: name, pos: import_name.pos, length: import_name.length },
+                    alias: Some(AstNode { node: alias, pos: import_alias.pos, length: import_alias.length }),
+                }),
+                pos:import_keyword.pos,
+                length:import_keyword.length,
+            };
+        }
+        let _import_semi = match self.eat(&TokenType::SemiColon,"missing semicolon") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        return AstNode {
+            node:
+            Node::Import(Import {
+                import_name: AstNode { node: name, pos: import_name.pos, length: import_name.length },
+                alias: None
+            }),
+            pos:import_keyword.pos,
+            length:import_keyword.length,
+        };
+    }
+    
+    fn parse_function(&mut self) -> AstNode<Node> {
+        let func_keyword = match self.eat(&TokenType::Keyword(KeyWords::FUNC),"") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let func_name = match self.eat(&TokenType::Identifier(String::new()),"expect a function name") {
+            Ok(t)=>t,
+            Err(e) => {
+                self.skip_until(&TokenType::LeftBrace);
+                self.skip_block();
+                return e;
+            }
+        };
+        let function_name = if let TokenType::Identifier(id) = func_name.node {
+            id
+        } else {
+            String::new()
+        };
+        let _ = match self.eat(&TokenType::LeftParen,"expected function parameter") {
+            Ok(t)=>t,
+            Err(e) => {
+                self.skip_until(&TokenType::LeftBrace);
+                self.skip_block();
+                return e;
+            }
+        };
+        let mut parameters: Vec<AstNode<Var>> = vec![];
+        while !self.expected(&TokenType::RightParen){
+            
+            let para_name_t = match self.eat(&TokenType::Identifier(String::new()),"missing parameter name") {
+                Ok(t)=>t,
+                Err(e) => {
+                    self.skip_until(&TokenType::LeftBrace);
+                    self.skip_block();
+                    return e;
+                }
+            };
+            let para_name = if let TokenType::Identifier(id) = para_name_t.node {
                 id
             }
             else{
                 String::new()
             };
-            parameters.push(Var {constant:false,name:para_name,var_type:para_type});
-            if self.expected(Token::Comma) {
-                self.eat(Token::Comma);
+            match self.eat(&TokenType::Colon,"expected ':' for type declaration"){
+                Ok(t) => t,
+                Err(e) => {
+                    self.skip_until(&TokenType::LeftBrace);
+                    self.skip_block();
+                    return e;
+                }
+            };
+            let para_type_t = match self.eat(&TokenType::DataType(DataType::Void),"missing parameter type") {
+                Ok(t)=>t,
+                Err(e) => {
+                    self.skip_until(&TokenType::LeftBrace);
+                    self.skip_block();
+                    return e;
+                }
+            };
+            let para_type = if let TokenType::DataType(data_type) = para_type_t.node {
+                data_type
+            }
+            else{
+                DataType::Void
+            };
+            parameters.push(
+                AstNode::new(
+                    Var {
+                        constant:None,
+                        name:AstNode::new(para_name, para_name_t.pos, para_name_t.length),
+                        var_type:AstNode::new(para_type, para_type_t.pos, para_type_t.length)
+                    },
+                    para_type_t.pos,
+                    para_type_t.length + 1 + para_name_t.length
+                )
+                
+            );
+            if self.expected(&TokenType::Comma) {
+                self.eat(&TokenType::Comma,"");
             }
         }
-        let _ = self.eat(Token::RightParen);
+        let r_paren = match self.eat(&TokenType::RightParen,"") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
         let mut return_type = DataType::Void;
-        if self.expected(Token::Colon) {
-            let _ = self.eat(Token::Colon);
-            let return_token = self.eat(Token::DataType(DataType::String));
-            return_type = if let Token::DataType(data_type) = return_token {
+        if self.expected(&TokenType::Colon) {
+            let _ = self.eat(&TokenType::Colon,"");
+            let return_token = match self.eat(&TokenType::DataType(DataType::Void),"expected function return type, omit ':' if type is void") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            return_type = if let TokenType::DataType(data_type) = return_token.node {
                 data_type
             }
             else{
                 DataType::Void
             };
         }
-        let _ = self.eat(Token::LeftBrace);
+        let body = self.parse_block();
         
-        let function_body = if !self.expected(Token::RightBrace) {
-            self.parse_body(Token::RightBrace)
-        }
-        else{
-            Body {instructions:vec![]}
-        };
-        let _ = self.eat(Token::RightBrace);
-        let function_name = if let Token::Identifier(id) = func_name {
-            id
-        } else {
-            String::new()
-        };
-        self.iden_map.insert(function_name.clone(), Node::Function(
-            FuncDef {
-                function_name: function_name.clone(),
-                body:function_body.clone(),
-                parameter:parameters.clone(),
-                return_type:return_type.clone()
-            }
-        ));
-        return Node::Function(
-            FuncDef {
-                function_name: function_name.clone(),
-                body:function_body.clone(),
-                parameter:parameters,
-                return_type:return_type.clone()
-            }
+        return AstNode::new(
+            Node::Function(
+                FuncDef {
+                    function_name:AstNode::new(
+                        function_name,
+                        func_name.pos,
+                        func_name.length
+                    ),
+                    body,
+                    parameters,
+                    return_type:AstNode::new(return_type.clone(),r_paren.pos,return_type.to_string().len() as u32)
+                }
+            ),
+            func_keyword.pos,
+            0
         );
 
     }
-    fn parse_iden_init(&mut self) -> Node{
-        let mut constant = false;
-        if self.expected(Token::Keyword(KeyWords::CONST)){
-            self.eat(Token::Keyword(KeyWords::CONST));
-            constant = true;
+    fn parse_return(&mut self) -> AstNode<Node> {
+        let ret_kw = match self.eat(&TokenType::Keyword(KeyWords::RETURN),"") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        if self.expected(&TokenType::SemiColon) {
+            self.eat(&TokenType::SemiColon,"");
+            return AstNode::new(Node::Return(None),ret_kw.pos,ret_kw.length+1);
         }
-        let data_type_token = self.eat(Token::DataType(DataType::Void));
-        let data_type = if let Token::DataType(data_type) = data_type_token {
+        let exp = self.parse_primary();
+        let val = AstNode::new(Node::Return(Some(Box::from(exp.clone()))),ret_kw.pos,ret_kw.length + 1 + exp.length);
+        match self.eat(&TokenType::SemiColon,"missing semicolon") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        val
+    }
+
+    fn parse_condition(&mut self) -> AstNode<Node>{
+        let if_condition;
+        let if_kw =match self.eat(&TokenType::Keyword(KeyWords::IF),"") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        // if self.expected(&TokenType::LeftParen){
+        //     self.eat(&TokenType::LeftParen);
+        //     if_condition = self.parse_primary();
+        //     self.eat(&TokenType::RightParen);
+            
+        // }
+        //else{
+
+        if_condition = self.parse_primary();
+        //}
+        // match self.eat(&TokenType::LeftBrace) {
+        //     Ok(t)=>t,
+        //     Err(e) => {return e;}
+        // };
+        // let if_body = self.parse_body(TokenType::RightBrace);
+        // match self.eat(&TokenType::RightBrace) {
+        //     Ok(t)=>t,
+        //     Err(e) => {return e;}
+        // };
+        let if_body = self.parse_block();
+        let mut elseif_block:Vec<(AstNode<Node>,Body)> = vec![];
+        while self.expected(&TokenType::Keyword(KeyWords::ELSEIF)){
+            let elif_condition;
+            match self.eat(&TokenType::Keyword(KeyWords::ELSEIF),"") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            // if self.expected(&TokenType::LeftParen){
+            //     self.eat(&TokenType::LeftParen);
+            //     elif_condition = self.parse_primary();
+            //     self.eat(&TokenType::RightParen);
+                
+            // }
+            // else{
+            elif_condition = self.parse_primary();
+            //}
+            // match self.eat(&TokenType::LeftBrace) {
+            //     Ok(t)=>t,
+            //     Err(e) => {return e;}
+            // };
+            // let elif_body = self.parse_body(TokenType::RightBrace);
+            // match self.eat(&TokenType::RightBrace) {
+            //     Ok(t)=>t,
+            //     Err(e) => {return e;}
+            // };
+            let elif_body = self.parse_block();
+            elseif_block.push((elif_condition,elif_body))
+        }
+        let else_block = if self.expected(&TokenType::Keyword(KeyWords::ELSE)){
+            match self.eat(&TokenType::Keyword(KeyWords::ELSE),"") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            // match self.eat(&TokenType::LeftBrace) {
+            //     Ok(t)=>t,
+            //     Err(e) => {return e;}
+            // };
+            // let else_body = self.parse_body(TokenType::RightBrace);
+            // match self.eat(&TokenType::RightBrace) {
+            //     Ok(t)=>t,
+            //     Err(e) => {return e;}
+            // };
+            let else_body = self.parse_block();
+            Some(else_body)
+        }
+        else{
+            None
+        };
+        AstNode::new(
+            Node::Conditional(
+                ConditionalBlock {
+                    if_block: (Box::new(if_condition),if_body),
+                    elif_block:elseif_block,
+                    else_block
+                }
+            ),
+            if_kw.pos,
+            0
+        )
+        
+    }
+    fn parse_for(&mut self) -> AstNode<Node>{
+        let for_kw = match self.eat(&TokenType::Keyword(KeyWords::FOR),"") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let iden = if self.expected(&TokenType::LeftParen) {
+            self.parse_paren()
+        }
+        else {
+            let iden = match self.eat(&TokenType::Identifier(String::new()),"expected identifier after 'for'") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            let ide= if let TokenType::Identifier(id) = iden.node {
+                id
+            }
+            else{
+                String::new()
+            };
+            AstNode::new(Node::Variable(ide),iden.pos,iden.length)
+        };
+        match self.eat(&TokenType::Keyword(KeyWords::IN),"expected 'in' keyword") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let range = self.parse_range();
+
+        // match self.eat(&TokenType::LeftBrace,"") {
+        //     Ok(t)=>t,
+        //     Err(e) => {return e;}
+        // };
+        let for_body = self.parse_block();//self.parse_body(TokenType::RightBrace);
+        // match self.eat(&TokenType::RightBrace) {
+        //     Ok(t)=>t,
+        //     Err(e) => {return e;}
+        // };
+        AstNode::new(
+            Node::For(ForLoop {
+                body:for_body ,
+                var:Some(Box::new(iden)),
+                range:Box::new(range)
+            }),
+            for_kw.pos,
+            for_kw.length
+        )
+        
+        
+    }
+
+    fn parse_range(&mut self) -> AstNode<Node>{
+        
+        let left = self.parse_primary();
+        if self.expected(&TokenType::Range) {
+            match self.eat(&TokenType::Range,"expected range") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            let right = self.parse_primary();
+            return AstNode::new(Node::Range(Range {start:Box::new(left.clone()),end:Box::new(right.clone())}),left.pos,left.length+2+right.length);
+        }
+        if let Node::Range(r) = &left.node {
+            left
+        }
+        else{
+            let er =self.raise_error("expected token 'range' after 'in' keyword");
+            AstNode::new(Node::ParserError(er.clone()),er.pos,0)
+        }
+    }
+
+    fn parse_while(&mut self) -> AstNode<Node> {
+        let while_kw = match self.eat(&TokenType::Keyword(KeyWords::WHILE),"") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let loop_condition = self.parse_primary();
+        // if self.expected(&TokenType::LeftParen){
+        //     self.eat(&TokenType::LeftParen,"");
+        //     loop_condition = self.parse_primary();
+        //     match self.eat(&TokenType::RightParen,"unclosed parenthesis") {
+        //         Ok(t)=>t,
+        //         Err(e) => {return e;}
+        //     };
+            
+        // }
+        // else{
+        //     loop_condition = self.parse_primary();
+        // }
+        // match self.eat(&TokenType::LeftBrace) {
+        //     Ok(t)=>t,
+        //     Err(e) => {return e;}
+        // };
+        let loop_body = self.parse_block();//self.parse_body(TokenType::RightBrace);
+        // match self.eat(&TokenType::RightBrace) {
+        //     Ok(t)=>t,
+        //     Err(e) => {return e;}
+        // };
+        AstNode::new(
+            Node::While(
+                WhileLoop {
+                    condition: Box::new(loop_condition),
+                    body: loop_body 
+                }
+            ),
+            while_kw.pos,
+            0
+        )
+    }
+
+    fn parse_paren(&mut self) -> AstNode<Node>{
+        self.eat(&TokenType::LeftParen,"");
+        let mut items:Vec<AstNode<Node>> = vec![];
+        while !self.expected(&TokenType::RightParen) {
+            items.push(self.parse_primary());
+            if self.expected(&TokenType::Comma) {
+                self.eat(&TokenType::Comma,"");
+            }
+        }
+        let close = match self.eat(&TokenType::RightParen,"unclosed parenthesis"){
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        if items.len() == 1 {
+            return items[0].clone();
+        }
+        else{
+            return AstNode::new(Node::Tuple(TupleBody { members: items.clone() }),items.first().unwrap().pos,close.length);
+        }
+    }
+
+    fn parse_iden_init(&mut self,is_const : bool) -> AstNode<Node>{
+        let declaration_token: AstNode<TokenType>;
+        //let start_pos : (u32,u32);
+        if is_const {
+            declaration_token = match self.eat(&TokenType::Keyword(KeyWords::CONST),"") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+        }
+        else {
+            declaration_token = match self.eat(&TokenType::Keyword(KeyWords::LET),"") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+        }
+
+        
+        let var_name_token = match self.eat(&TokenType::Identifier(String::new()),"expected an identifier") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let var_name = if let TokenType::Identifier(id) = var_name_token.node {
+            id
+        }
+        else{
+            String::new()
+        };
+        
+
+        match self.eat(&TokenType::Colon,"expected ':' for type declaration"){
+            Ok(t) => t,
+            Err(e) => {return e;}
+        };
+
+        let data_type_token = match self.eat(&TokenType::DataType(DataType::Void),"expected a type") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
+        };
+        let data_type = if let TokenType::DataType(data_type) = data_type_token.node {
             data_type
         }
         else{
             DataType::Void
         };
-        let var_name_token = self.eat(Token::Identifier(String::new()));
-        let var_name = if let Token::Identifier(id) = var_name_token {
-            id
-        }
-        else{
-            String::new()
+
+        let mut v = Var{
+            constant:Some(AstNode::new(is_const, declaration_token.pos, declaration_token.length)),
+            name:AstNode::new(
+                var_name,
+                var_name_token.pos,
+                var_name_token.length
+            ),
+            var_type:AstNode::new(
+                data_type.clone(),
+                data_type_token.pos,
+                data_type_token.length
+            ),
         };
-        if self.expected(Token::AssignmentOperator){
-            let operator = self.eat(Token::AssignmentOperator);
+        if self.expected(&TokenType::AssignmentOperator){
+            let operator = match self.eat(&TokenType::AssignmentOperator,"") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+
             let out = Node::Assignment(BinExp 
                 {
                     left: Box::from(
-                            Node::DeclareVar(
-                                Var{
-                                    constant,
-                                    name:var_name,
-                                    var_type:data_type
-                                }
+                            AstNode::new(
+                                Node::DeclareVar(v.clone()), 
+                                match &v.constant {
+                                    Some(c)=> c.pos, 
+                                    None => v.name.pos,
+                                },
+                                match &v.constant {
+                                    Some(c)=> c.length, 
+                                    None => v.name.length,
+                                },
+                            
                             )
+                            
                         ),
                     right: Box::from(self.parse_primary()),
-                    operator
+                    operator:operator.node,
                 }
             );
-            self.eat(Token::SemiColon);
-            return out; 
+            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            return AstNode::new(out,match &v.constant {
+                Some(c)=> c.pos, 
+                None => v.name.pos,
+            },
+            match &v.constant {
+                Some(c)=> c.length, 
+                None => v.name.length,
+            })
+            
         }
-        self.eat(Token::SemiColon);
-        let v = Var{
-            constant,
-            name:var_name,
-            var_type:data_type
+        match self.eat(&TokenType::SemiColon,"missing semicolon") {
+            Ok(t)=>t,
+            Err(e) => {return e;}
         };
-        self.iden_map.insert(v.name.clone(), Node::DeclareVar(
-            v.clone()
-        ));
-        return Node::DeclareVar(
-            v.clone()
+        return AstNode::new(
+            Node::DeclareVar(v.clone()),
+            match &v.constant {
+                Some(c)=> c.pos, 
+                None => v.name.pos,
+            },
+            match &v.constant {
+                Some(c)=> c.length, 
+                None => v.name.length,
+            }
         );
     }
 
-    fn parse_iden(&mut self) -> Node{
-        let iden_token = self.eat(Token::Identifier(String::new()));
-        let iden = if let Token::Identifier(id) = iden_token {
+    fn parse_iden(&mut self) -> AstNode<Node>{
+        let iden_token = match self.eat(&TokenType::Identifier(String::new()),"") {
+            Ok(t) => t,
+            Err(e) => {return e;}
+        };
+        
+        let iden = if let TokenType::Identifier(id) = iden_token.node {
             id
         }
         else{
             String::new()
         };
-        match &self.look_ahead{
-            Token::LeftParen => {
-                let mut func_call = FuncCall {function_name:iden, arguments:vec![]};
-                self.eat(Token::LeftParen);
-                while !self.expected(Token::RightParen){
+        match &self.look_ahead.token{
+            TokenType::LeftParen => {
+                let mut func_call = FuncCall {function_name:AstNode::new(iden,iden_token.pos,iden_token.length), arguments:vec![]};
+                let open_p = match self.eat(&TokenType::LeftParen,"") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                
+                while !self.expected(&TokenType::RightParen) {
+                    if self.expected(&TokenType::EOF) {
+                        //let er = self.raise_error("unclosed parenthesis");
+                        self.err_pipe.raise_error(crate::ErrorType::SyntaxError, "unclosed parenthesis", open_p.pos, 1);
+                        return AstNode::new(Node::ParserError(
+                            ParserError::new(
+                                ErrorType::SyntaxError,
+                                "unclosed parenthesis",
+                                open_p.pos
+                            )
+                        ),open_p.pos,1);
+                    }
                     func_call.arguments.push(self.parse_primary());
-                    if self.expected(Token::Comma) {
-                        self.eat(Token::Comma);
+                    if self.expected(&TokenType::Comma) {
+                        self.eat(&TokenType::Comma,"");
                     }
                 }
-                self.eat(Token::RightParen);
-                self.eat(Token::SemiColon);
-                Node::FunctionCall(func_call)
+                match self.eat(&TokenType::RightParen,"") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                AstNode::new(Node::FunctionCall(func_call),iden_token.pos,iden_token.length+3)
+                // match self.var_map.get(&func_call.function_name){
+                //     Some(_) => Node::FunctionCall(func_call),
+                //     None => Node::ParserError(
+                //         self.raise_error(ErrorType::SemanticError, format!("use of undeclared function {}",&func_call.function_name).as_str())
+                //     ),
+                // }
             },
-            Token::AssignmentOperator => {
-                let operator = self.eat(Token::AssignmentOperator);
+            TokenType::AssignmentOperator => {
+                // let var_info = match self.var_map.get(&iden){
+                //     Some(info) => {
+                //         info
+                //     },
+                //     None => {
+                //         return  Node::ParserError(self.raise_error(ErrorType::SemanticError, format!("reassignment of undeclared variable {}",&iden).as_str()))
+                //     },
+                // };
+                let operator = match self.eat(&TokenType::AssignmentOperator,"") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+
+                let right = self.parse_primary();
                 let out = Node::Assignment(BinExp {
-                    left: Box::from(Node::Variable(iden)),
-                    right: Box::from(self.parse_primary()), 
-                    operator
+                    left: Box::from(AstNode::new(Node::Variable(iden),iden_token.pos,iden_token.length)),
+                    right: Box::from(right.clone()), 
+                    operator:operator.node,
                 });
-                self.eat(Token::SemiColon);
-                out
+                
+                match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                AstNode::new(out,iden_token.pos,iden_token.length + operator.length + right.length)
             },
-            Token::Dot => {
-                let mut caller = self.iden_map.get(&iden).unwrap().clone();
-                while self.expected(Token::Dot) {
-                    self.eat(Token::Dot);
-                    let method_token = self.eat(Token::Identifier(String::new()));
-                    let method_iden = if let Token::Identifier(id) = method_token {
+            TokenType::Dot => {
+                // let mut caller = Node::Variable(match self.var_map.get(&iden) {
+                //     Some(var) => UseVar {var_ref:var},
+                //     None => return Node::ParserError(self.raise_error(ErrorType::SemanticError, format!("use of undeclared variable '{}'",&iden).as_str()))
+                // });
+                let mut caller = AstNode::new(Node::Variable(iden),iden_token.pos,iden_token.length);
+                while self.expected(&TokenType::Dot) {
+                    self.eat(&TokenType::Dot,"");
+                    let method_token = match self.eat(&TokenType::Identifier(String::new()),"expected field name or method") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let method_iden = if let TokenType::Identifier(id) = method_token.node {
                         id
                     }
                     else{
                         String::new()
                     };
-                    let mut method_call = MethodCall { caller: None, method_name: method_iden, arguments: vec![] };
-                    self.eat(Token::LeftParen);
-                    while !self.expected(Token::RightParen) {
+                    let mut method_call = MethodCall { caller: None, method_name: AstNode::new(method_iden,method_token.pos,method_token.length), arguments: vec![] };
+                    match self.eat(&TokenType::LeftParen,"expected arguments") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    while !self.expected(&TokenType::RightParen) {
+                        if self.expected(&TokenType::EOF){
+                            self.raise_error("unclosed parenthesis");
+                        }
                         method_call.arguments.push(self.parse_primary());
-                        if self.expected(Token::Comma) {
-                            self.eat(Token::Comma);
+                        if self.expected(&TokenType::Comma) {
+                            self.eat(&TokenType::Comma,"");
                         }
                     }
-                    self.eat(Token::RightParen);
+                    match self.eat(&TokenType::RightParen,"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
                     method_call.caller = Some(Box::from(caller));
-                    caller = Node::MethodCall(method_call);
+                    caller = AstNode::new(Node::MethodCall(method_call),method_token.pos,method_token.length);
                     
                 }
-                self.eat(Token::SemiColon);
+                match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
                 caller
             },
-            _ => Node::Variable(iden),
+            _ => {
+                AstNode::new(Node::Variable(iden),iden_token.pos,iden_token.length)
+            },
         }
     }
 
-    fn parse_primary(&mut self) -> Node {
-        let mut left:Node = self.parse_term();
-        while self.expected(Token::AdditionOperator) || self.expected(Token::SubtractionOperator){
-            let operator = self.eat(self.look_ahead.clone());
-            let right:Node = self.parse_term();
-            left = Node::BinaryExpression(BinExp { left:Box::from(left), right:Box::from(right), operator });
+    fn parse_primary(&mut self) -> AstNode<Node> {
+        let mut left = self.parse_term();
+        match &self.look_ahead.token{
+            TokenType::Range =>{
+                if self.expected(&TokenType::Range){
+                    let operator = match self.eat(&TokenType::Range,"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let right = self.parse_term();
+                    left = AstNode::new(
+                        Node::Range(
+                            Range {
+                                start:Box::from(left.clone()),
+                                end:Box::from(right.clone()),
+                            }
+                        ),
+                        left.pos,
+                        left.length + operator.length + right.length
+                    );
+                }
+            },
+            TokenType::AdditionOperator | TokenType::SubtractionOperator =>{
+                while self.expected(&TokenType::AdditionOperator) || self.expected(&TokenType::SubtractionOperator){
+                    let operator = match self.eat(&self.look_ahead.token.clone(),"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let right = self.parse_term();
+                    left = AstNode::new(
+                        Node::BinaryExpression(
+                            BinExp {
+                                left:Box::from(left.clone()),
+                                right:Box::from(right.clone()),
+                                operator:operator.node
+                            }
+                        ),
+                        left.pos,
+                        left.length + operator.length + right.length
+                    );
+                }
+            },
+            TokenType::Or =>{
+                while self.expected(&TokenType::Or){
+                    let operator = match self.eat(&TokenType::Or,"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let right = self.parse_term();
+                    left = AstNode::new(
+                        Node::BinaryExpression(
+                            BinExp {
+                                left:Box::from(left.clone()),
+                                right:Box::from(right.clone()),
+                                operator:operator.node
+                            }
+                        ),
+                        left.pos,
+                        left.length + operator.length + right.length
+                    );
+                }
+            },
+            _ => {
+
+            }
+
         }
+        
         return left;
     }
 
-    fn parse_term(&mut self) -> Node {
-        let mut left:Node = self.parse_factor();
-        while self.expected(Token::MultiplicationOperator) || self.expected(Token::DivisionOperator) || self.expected(Token::ModuloOperator){
-            let operator = self.eat(self.look_ahead.clone());
-            let right:Node = self.parse_factor();
-            left = Node::BinaryExpression(BinExp { left:Box::from(left), right:Box::from(right), operator });
+    fn parse_term(&mut self) -> AstNode<Node> {
+        let mut left = self.parse_factor();
+        match self.look_ahead.token{
+            TokenType::MultiplicationOperator | TokenType::DivisionOperator =>{
+                while self.expected(&TokenType::MultiplicationOperator) || self.expected(&TokenType::DivisionOperator) || self.expected(&TokenType::ModuloOperator){
+                    let operator = match self.eat(&self.look_ahead.token.clone(),"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let right = self.parse_factor();
+                    left = AstNode::new(
+                        Node::BinaryExpression(
+                            BinExp {
+                                left:Box::from(left.clone()),
+                                right:Box::from(right.clone()),
+                                operator:operator.node
+                            }
+                        ),
+                        left.pos,
+                        left.length + operator.length + right.length
+                    );
+                }
+            },
+            TokenType::And =>{
+                while self.expected(&TokenType::And){
+                    let operator = match self.eat(&self.look_ahead.token.clone(),"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let right = self.parse_term();
+                    left = AstNode::new(
+                        Node::BinaryExpression(
+                            BinExp {
+                                left:Box::from(left.clone()),
+                                right:Box::from(right.clone()),
+                                operator:operator.node
+                            }
+                        ),
+                        left.pos,
+                        left.length + operator.length + right.length
+                    );
+                }
+            },
+            _ => {
+
+            }
+
         }
+        
         return left;
         
     }
 
-    fn parse_factor(&mut self) -> Node {
-        match &self.look_ahead.clone() {
-            Token::Identifier(id) => {
-                self.eat(Token::Identifier(String::new()));
-                Node::Variable(id.to_owned())
+    fn parse_factor(&mut self) -> AstNode<Node> {
+        let node = match &self.look_ahead.token.clone() {
+            TokenType::Identifier(id) => {
+                // let var_info = match self.var_map.get(&id){
+                //     Some(info) => {
+                //         match info {
+                //             Node::DeclareVar(var) => {
+                //                 var
+                //             }
+                //             _ => {
+
+                //             }
+                //         }
+                //         println!("found {:#?}",info);
+                //         info
+                //     },
+                //     None => {
+                //         return (Node::ParserError(self.raise_error(ErrorType::SemanticError, format!("use of undeclared variable '{}'",&id).as_str())),DataType::Void)
+                //     },
+                // };
+                self.parse_iden()
+                //self.eat(&TokenType::Identifier(String::new()),"");
             },
-            Token::IntLiteral(i) => {
-                self.eat(Token::IntLiteral(0));
-                Node::Literal(LiteralValue::Int(*i))
+            TokenType::IntLiteral(i) => {
+                let int = match self.eat(&TokenType::IntLiteral(0),"") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                AstNode::new(Node::Literal(LiteralValue::Int(*i)),int.pos,int.length)
             },
-            Token::FloatLiteral(f) => {
-                self.eat(Token::FloatLiteral(0.0));
-                Node::Literal(LiteralValue::Float(*f))
+            TokenType::FloatLiteral(f) => {
+                let flt = match self.eat(&TokenType::FloatLiteral(0.0),"") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                
+                AstNode::new(Node::Literal(LiteralValue::Float(*f)),flt.pos,flt.length)
             },
-            Token::StringLiteral(s) => {
-                self.eat(Token::StringLiteral(String::new()));
-                Node::Literal(LiteralValue::Str(s.clone()))
+            TokenType::StringLiteral(s) => {
+                let str = match self.eat(&TokenType::StringLiteral(String::new()),"") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                AstNode::new(Node::Literal(LiteralValue::Str(s.clone())),str.pos,str.length)
             },
-            Token::LeftParen =>{
-                self.eat(Token::LeftParen);
+            TokenType::LeftParen =>{
+                self.eat(&TokenType::LeftParen,"");
                 let out = self.parse_primary();
-                self.eat(Token::RightParen);
+                match self.eat(&TokenType::RightParen,"unclosed parenthesis") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
                 out
             },
-            Token::SubtractionOperator => {
-                self.eat(Token::SubtractionOperator);
-                match &self.look_ahead.clone(){
-                    Token::IntLiteral(i) => {
-                        self.eat(Token::IntLiteral(0));
-                        Node::Literal(LiteralValue::Int(*i*-1))
+            TokenType::Not =>{
+                self.eat(&TokenType::Not,"");
+                let out = self.parse_primary();
+                
+                AstNode::new(Node::BooleanNot(NotExp { exp: Box::new(out.clone()) }), out.pos, out.length)
+            },
+            TokenType::SubtractionOperator => {
+                self.eat(&TokenType::SubtractionOperator,"");
+                match self.look_ahead.token{
+                    TokenType::IntLiteral(i) => {
+                        let int = match self.eat(&TokenType::IntLiteral(0),"") {
+                            Ok(t)=>t,
+                            Err(e) => {return e;}
+                        };
+                        AstNode::new(Node::Literal(LiteralValue::Int(i*-1)),int.pos,int.length)
                     },
-                    Token::FloatLiteral(f) => {
-                        self.eat(Token::FloatLiteral(0.0));
-                        Node::Literal(LiteralValue::Float(*f*-1.0))
+                    TokenType::FloatLiteral(f) => {
+                        let flt = match self.eat(&TokenType::FloatLiteral(0.0),"") {
+                            Ok(t)=>t,
+                            Err(e) => {return e;}
+                        };
+                        AstNode::new(Node::Literal(LiteralValue::Float(f*-1.0)),flt.pos,flt.length)
                     },
                     
                     _ => {
-                        Node::Error("Expected value after return keyword".to_string())
-                    },
+                        let er = self.raise_error("expected expression after '-' token");
+                        
+                        AstNode::new(
+                            Node::ParserError(
+                                er.clone()
+                            ),
+                            er.pos,
+                            0
+                        )
+                    }
                 }
                 
             },
             
             _ => {
-                Node::Error("Expected value after return keyword".to_string())
-            },
+                let er = self.raise_error("expected expression");
+    
+                AstNode::new(
+                    Node::ParserError(
+                        er.clone()
+                    ),
+                    er.pos,
+                    0
+                )
+            }
+        };
+        if self.expected(&TokenType::More) ||self.expected(&TokenType::MoreEqual) || self.expected(&TokenType::Less) ||self.expected(&TokenType::LessEqual) ||self.expected(&TokenType::Equal) {
+            let operator = match self.eat(&self.look_ahead.token.clone(),"") {
+                Ok(t)=>t,
+                Err(e) => {return e;}
+            };
+            let right = self.parse_primary();
+            AstNode::new(
+                Node::BinaryExpression(
+                    BinExp {
+                        left: Box::new(AstNode::new(node.node, node.pos, node.length)),
+                        right: Box::new(right.clone()),
+                        operator:operator.node
+                    }
+                ),
+                node.pos,
+                node.length + operator.length + right.length
+            )
+        }
+        else{
+            node
         }
         
     }
 
-    pub fn parse(&mut self) -> Vec<Node> {
-        self.parse_body(Token::EOF).instructions
+    pub fn parse(&mut self) -> Option<Body> {
+        let program = self.parse_body(TokenType::EOF);
+        if self.err_pipe.error_generated.borrow().len() > 0 {
+            None
+        }
+        else{
+            Some(program)
+        }
     }
 }

@@ -1,6 +1,8 @@
+func print(str string) : void {
 
+}
 func main() : i32 {
-    i32 a = (2+1)*2+3;
+    let a : u8 = (2+1)*2;
     printf("%d",a);
     return 0;
 }

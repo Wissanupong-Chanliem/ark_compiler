@@ -11,3 +11,7 @@ BinExp = <PimaryExpression> <Operator> <PimaryExpression>
 PimaryExpression = Term (+- Term)
 Term = Factor (*/ Factor)
 Factor (literal),(PimaryExpression),(+-)literal,(+-)(PimaryExpression)
+
+BooleanExp = <Or> (|| <Or>)
+Or = <And> (&& <And>)
+And = 

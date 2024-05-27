@@ -1,8 +1,22 @@
-func print(str string) : void {
-
+func is_even(i:i32) : bool {
+    if i % 2 == 0 {
+        return true;
+    }
+    return false;
 }
+
+func print() {
+    
+}
+
 func main() : i32 {
-    let a : u8 = (2+1)*2;
-    printf("%d",a);
+    let a : i32 = 2;
+    is_even(a);
+    if is_even(a) {
+        print("even");
+    }
+    else {
+        print("odd");
+    }
     return 0;
 }

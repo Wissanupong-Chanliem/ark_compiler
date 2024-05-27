@@ -1,0 +1,11 @@
+
+
+func print(abc:i32,a:u32) : i32{
+    let a: i32 = (12+4)-3*2;
+    a = 5;
+    return 10;
+}
+
+func main(){
+    let b:i32 = print(10,32);
+}

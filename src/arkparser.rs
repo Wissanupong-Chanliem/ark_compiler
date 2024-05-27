@@ -1,6 +1,6 @@
-use crate::{symbol_table::{self, SymbolTable}, tokenizer::{self, DataType, KeyWords, Token, TokenType, Tokenizer}, ErrorPipeline, ErrorType};
-use std::{mem};
-
+use crate::{symbol_table::{self, SymbolTable}, tokenizer::{self, Array, DataType, KeyWords, Token, TokenType, Tokenizer}, ErrorPipeline, ErrorType};
+use core::fmt;
+use std::{mem::{self, discriminant}, path::Display};
 
 #[derive(Debug,Clone)]
 pub enum Node {
@@ -24,7 +24,7 @@ pub enum Node {
     ParserError(ParserError),
 }
 
-#[derive(Debug,Clone)]
+#[derive(Clone)]
 pub struct AstNode <T> {
     pub node: T,
     pub pos: (u32,u32),
@@ -74,7 +74,8 @@ impl ParserError{
 pub enum LiteralValue {
     Int(i64),
     Float(f64),
-    Str(String)
+    Str(String),
+    Bool(bool)
 }
 
 
@@ -82,6 +83,61 @@ pub enum LiteralValue {
 pub struct Body {
     pub instructions: Vec<AstNode<Node>>,
 }
+
+impl Body {
+    pub fn contains(&self, node:&Node) -> bool {
+        for instruction in &self.instructions {
+            if let Node::Body(bd) = &instruction.node {
+                if bd.contains(node){
+                    return true;
+                }
+            }
+            else{
+                if discriminant(&instruction.node) == discriminant(node){
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+}
+
+impl fmt::Debug for AstNode<Node>{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f,"{:#?}",self.node)
+    }
+}
+
+impl fmt::Debug for AstNode<DataType>{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f,"{:#?}",self.node)
+    }
+}
+
+impl fmt::Debug for AstNode<TokenType>{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f,"{:#?}",self.node)
+    }
+}
+
+impl fmt::Debug for AstNode<String>{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f,"{}",self.node)
+    }
+}
+
+impl fmt::Debug for AstNode<bool>{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f,"{}",self.node)
+    }
+}
+
+impl fmt::Debug for AstNode<Var>{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f,"{:#?}",self.node)
+    }
+}
+
 
 #[derive(Debug,Clone)]
 pub struct ConditionalBlock{
@@ -118,7 +174,7 @@ pub struct TupleBody {
 pub struct BinExp {
     pub left: Box<AstNode<Node>>,
     pub right: Box<AstNode<Node>>,
-    pub operator: TokenType,
+    pub operator: AstNode<TokenType>,
     //pub pos:(u32,u32)
 }
 
@@ -261,20 +317,20 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
     }
     fn skip_block(&mut self){
         let mut s: Vec<bool> = vec![];
+        
         if self.expected(&TokenType::LeftBrace){
             s.push(true);
             let open = self.eat(&TokenType::LeftBrace, "expected open brace").unwrap();
             while !s.is_empty(){
-                self.look_ahead = self.tokenizer.get_next_token();
-                
+                //println!("skip: {:#?}",self.look_ahead);
                 if self.expected(&TokenType::EOF){
                     self.err_pipe.raise_error(
                         ErrorType::SyntaxError,
                         "unclosed brace",
-                        open.pos,
-                        open.length
+                        self.look_ahead.pos,
+                        self.look_ahead.length
                     );
-                    break;
+                    return;
                 }
                 else if self.expected(&TokenType::LeftBrace){
                     s.push(true);
@@ -282,8 +338,9 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 else if self.expected(&TokenType::RightBrace){
                     s.pop();
                 }
-                //println!("current: {:#?}",self.look_ahead);
+                self.look_ahead = self.tokenizer.get_next_token();
             }
+            //self.eat(&TokenType::RightBrace, "expected open brace").unwrap();
         }
     }
     fn raise_error(&mut self,error_message:&str) -> ParserError {
@@ -300,6 +357,47 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
         //self.look_ahead = self.tokenizer.get_next_token();
         err
     }
+
+    fn parse_data_type(&mut self) -> Result<AstNode<DataType>,AstNode<Node>> {
+        let data_type_t = match self.eat(&TokenType::DataType(DataType::Void), "Expected a type"){
+            Ok(dt) => {dt},
+            Err(e) => return Err(e)
+        };
+        let mut data_type = if let TokenType::DataType(t) = data_type_t.node {
+            t
+        }
+        else{
+            DataType::Void
+        };
+        //let mut array:Array = vec![];
+        while self.expected(&TokenType::LeftBracket){
+            self.eat(&TokenType::LeftBracket, "");
+            let size = match self.eat(&TokenType::IntLiteral(0), "expected fixed array size"){
+                Ok(node) => if let TokenType::IntLiteral(i) = node.node{
+                    i
+                }
+                else {
+                    0
+                },
+                Err(e) => return Err(e)
+            };
+            match self.eat(&TokenType::RightBracket, "expected closing bracket"){
+                Ok(_) => (),
+                Err(e) => return Err(e)
+            };
+            data_type = DataType::Array(Array{
+                length: size as u32,
+                data_type: Box::from(data_type),
+            });
+        }
+        Ok(
+            AstNode {
+                node: data_type,
+                pos: data_type_t.pos,
+                length: data_type_t.length
+            }
+        )
+    }
     fn parse_block(&mut self) -> Body {
         
         let mut scope_body = Body {
@@ -314,13 +412,31 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                     
                     match keyword {
                         KeyWords::FUNC => {
-
-                            let func = self.parse_function();
-                            println!("{:#?}",&func);
-                            func
+                            let er = self.raise_error(
+                                "only top-level function declaration is allowed",
+                            );
+                            AstNode::new(
+                                Node::ParserError(
+                                    er.clone()
+                                ),
+                                er.pos,
+                                0
+                            )
+                            // let func = self.parse_function();
+                            // println!("{:#?}",&func);
+                            // func
                         },
                         KeyWords::IMPORT => {
-                            self.parse_import()
+                            
+                            let mut res = self.parse_import();
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
+
                         },
                         KeyWords::AS => AstNode {
                             node: Node::ParserError(
@@ -332,13 +448,34 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                             pos:self.look_ahead.pos
                         },
                         KeyWords::CONST => {
-                            self.parse_iden_init(true)
+                            let mut res = self.parse_iden_init(true);
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
                         },
                         KeyWords::LET => {
-                            self.parse_iden_init(false)
+                            let mut res = self.parse_iden_init(false);
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
                         },
                         KeyWords::RETURN => {
-                            self.parse_return()
+                            let mut res = self.parse_return();
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
                         },
                         KeyWords::FOR => {
                             self.parse_for()
@@ -384,7 +521,15 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                     }
                 },
                 TokenType::Identifier(_) => {
-                    self.parse_iden()
+                    
+                    let mut res = self.parse_iden();
+                    match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                        Ok(_)=>(),
+                        Err(e) => {
+                            res = e;
+                        }
+                    };
+                    res
                 },
                 TokenType::MultiplicationOperator => {todo!()},
                 TokenType::And => {
@@ -441,12 +586,11 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                     break;
                 },
                 _ => {
-                    println!("{:#?}",self.look_ahead.token);
+                    //println!("{:#?}",self.look_ahead.token);
                     todo!();
                 },
             };
             scope_body.instructions.push(node);
-            println!("{:#?}",scope_body.instructions);
         }
         
         if self.expected(&TokenType::RightBrace) {
@@ -468,13 +612,22 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                     
                     match keyword {
                         KeyWords::FUNC => {
-                            
-                            let a = self.parse_function();
-                            println!("{:#?}",&a);
-                            a
+
+                            let func = self.parse_function();
+                            //println!("{:#?}",&func);
+                            func
                         },
                         KeyWords::IMPORT => {
-                            self.parse_import()
+                            
+                            let mut res = self.parse_import();
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
+
                         },
                         KeyWords::AS => AstNode {
                             node: Node::ParserError(
@@ -486,13 +639,34 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                             pos:self.look_ahead.pos
                         },
                         KeyWords::CONST => {
-                            self.parse_iden_init(true)
+                            let mut res = self.parse_iden_init(true);
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
                         },
                         KeyWords::LET => {
-                            self.parse_iden_init(false)
+                            let mut res = self.parse_iden_init(false);
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
                         },
                         KeyWords::RETURN => {
-                            self.parse_return()
+                            let mut res = self.parse_return();
+                            match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                                Ok(_)=>(),
+                                Err(e) => {
+                                    res = e;
+                                }
+                            };
+                            res
                         },
                         KeyWords::FOR => {
                             self.parse_for()
@@ -539,7 +713,14 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 },
                 TokenType::Identifier(_) => {
                     
-                    self.parse_iden()
+                    let mut res = self.parse_iden();
+                    match self.eat(&TokenType::SemiColon,"missing semicolon") {
+                        Ok(_)=>(),
+                        Err(e) => {
+                            res = e;
+                        }
+                    };
+                    res
                 },
                 TokenType::MultiplicationOperator => {todo!()},
                 TokenType::And => {
@@ -591,7 +772,7 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                     )
                 },
                 _ => {
-                    println!("{:#?}",self.look_ahead.token);
+                    //println!("{:#?}",self.look_ahead.token);
                     todo!();
                 },
             };
@@ -622,10 +803,6 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 Ok(t)=>t,
                 Err(e) => {return e;}
             };
-            let _import_semi = match self.eat(&TokenType::SemiColon,"missing semicolon") {
-                Ok(t)=>t,
-                Err(e) => {return e;}
-            };
             
             let alias = if let TokenType::Identifier(id) = import_alias.node {
                 id
@@ -642,10 +819,6 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 length:import_keyword.length,
             };
         }
-        let _import_semi = match self.eat(&TokenType::SemiColon,"missing semicolon") {
-            Ok(t)=>t,
-            Err(e) => {return e;}
-        };
         return AstNode {
             node:
             Node::Import(Import {
@@ -690,6 +863,7 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 Ok(t)=>t,
                 Err(e) => {
                     self.skip_until(&TokenType::LeftBrace);
+                    
                     self.skip_block();
                     return e;
                 }
@@ -742,14 +916,15 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
             Ok(t)=>t,
             Err(e) => {return e;}
         };
+        let mut return_type_token :Option<AstNode<TokenType>> = None;
         let mut return_type = DataType::Void;
         if self.expected(&TokenType::Colon) {
             let _ = self.eat(&TokenType::Colon,"");
-            let return_token = match self.eat(&TokenType::DataType(DataType::Void),"expected function return type, omit ':' if type is void") {
-                Ok(t)=>t,
+            return_type_token = match self.eat(&TokenType::DataType(DataType::Void),"expected function return type, omit ':' if type is void") {
+                Ok(t)=> Some(t),
                 Err(e) => {return e;}
             };
-            return_type = if let TokenType::DataType(data_type) = return_token.node {
+            return_type = if let TokenType::DataType(data_type) = return_type_token.clone().unwrap().node {
                 data_type
             }
             else{
@@ -757,7 +932,10 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
             };
         }
         let body = self.parse_block();
-        
+        if return_type != DataType::Void && !body.contains(&Node::Return(None)){
+            let ret_token = return_type_token.unwrap();
+            self.err_pipe.raise_error(ErrorType::SyntaxError, "missing return statement", ret_token.pos, ret_token.length);
+        };
         return AstNode::new(
             Node::Function(
                 FuncDef {
@@ -782,15 +960,10 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
             Err(e) => {return e;}
         };
         if self.expected(&TokenType::SemiColon) {
-            self.eat(&TokenType::SemiColon,"");
             return AstNode::new(Node::Return(None),ret_kw.pos,ret_kw.length+1);
         }
         let exp = self.parse_primary();
         let val = AstNode::new(Node::Return(Some(Box::from(exp.clone()))),ret_kw.pos,ret_kw.length + 1 + exp.length);
-        match self.eat(&TokenType::SemiColon,"missing semicolon") {
-            Ok(t)=>t,
-            Err(e) => {return e;}
-        };
         val
     }
 
@@ -1043,16 +1216,9 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
             Ok(t) => t,
             Err(e) => {return e;}
         };
-
-        let data_type_token = match self.eat(&TokenType::DataType(DataType::Void),"expected a type") {
+        let data_type = match self.parse_data_type() {
             Ok(t)=>t,
             Err(e) => {return e;}
-        };
-        let data_type = if let TokenType::DataType(data_type) = data_type_token.node {
-            data_type
-        }
-        else{
-            DataType::Void
         };
 
         let mut v = Var{
@@ -1063,9 +1229,9 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 var_name_token.length
             ),
             var_type:AstNode::new(
-                data_type.clone(),
-                data_type_token.pos,
-                data_type_token.length
+                data_type.node.clone(),
+                data_type.pos,
+                data_type.length
             ),
         };
         if self.expected(&TokenType::AssignmentOperator){
@@ -1092,13 +1258,9 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                             
                         ),
                     right: Box::from(self.parse_primary()),
-                    operator:operator.node,
+                    operator:operator,
                 }
             );
-            match self.eat(&TokenType::SemiColon,"missing semicolon") {
-                Ok(t)=>t,
-                Err(e) => {return e;}
-            };
             return AstNode::new(out,match &v.constant {
                 Some(c)=> c.pos, 
                 None => v.name.pos,
@@ -1109,10 +1271,6 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
             })
             
         }
-        match self.eat(&TokenType::SemiColon,"missing semicolon") {
-            Ok(t)=>t,
-            Err(e) => {return e;}
-        };
         return AstNode::new(
             Node::DeclareVar(v.clone()),
             match &v.constant {
@@ -1167,10 +1325,6 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                     Ok(t)=>t,
                     Err(e) => {return e;}
                 };
-                match self.eat(&TokenType::SemiColon,"missing semicolon") {
-                    Ok(t)=>t,
-                    Err(e) => {return e;}
-                };
                 AstNode::new(Node::FunctionCall(func_call),iden_token.pos,iden_token.length+3)
                 // match self.var_map.get(&func_call.function_name){
                 //     Some(_) => Node::FunctionCall(func_call),
@@ -1197,13 +1351,9 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 let out = Node::Assignment(BinExp {
                     left: Box::from(AstNode::new(Node::Variable(iden),iden_token.pos,iden_token.length)),
                     right: Box::from(right.clone()), 
-                    operator:operator.node,
+                    operator:operator.clone(),
                 });
                 
-                match self.eat(&TokenType::SemiColon,"missing semicolon") {
-                    Ok(t)=>t,
-                    Err(e) => {return e;}
-                };
                 AstNode::new(out,iden_token.pos,iden_token.length + operator.length + right.length)
             },
             TokenType::Dot => {
@@ -1246,10 +1396,6 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                     caller = AstNode::new(Node::MethodCall(method_call),method_token.pos,method_token.length);
                     
                 }
-                match self.eat(&TokenType::SemiColon,"missing semicolon") {
-                    Ok(t)=>t,
-                    Err(e) => {return e;}
-                };
                 caller
             },
             _ => {
@@ -1257,8 +1403,98 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
             },
         }
     }
-
     fn parse_primary(&mut self) -> AstNode<Node> {
+        let mut left = self.parse_compose();
+        match &self.look_ahead.token{
+            TokenType::Or =>{
+                while self.expected(&TokenType::Or){
+                    let operator = match self.eat(&TokenType::Or,"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let right = self.parse_compose();
+                    left = AstNode::new(
+                        Node::BinaryExpression(
+                            BinExp {
+                                left:Box::from(left.clone()),
+                                right:Box::from(right.clone()),
+                                operator:operator.clone()
+                            }
+                        ),
+                        left.pos,
+                        left.length + operator.length + right.length
+                    );
+                }
+            },
+            _ => {
+
+            }
+        };
+        return left;
+    }
+
+    fn parse_compose(&mut self) -> AstNode<Node> {
+        let mut left = self.parse_boolean_expression();
+        match &self.look_ahead.token{
+            TokenType::And =>{
+                while self.expected(&TokenType::And){
+                    let operator = match self.eat(&TokenType::And,"") {
+                        Ok(t)=>t,
+                        Err(e) => {return e;}
+                    };
+                    let right = self.parse_boolean_expression();
+                    left = AstNode::new(
+                        Node::BinaryExpression(
+                            BinExp {
+                                left:Box::from(left.clone()),
+                                right:Box::from(right.clone()),
+                                operator:operator.clone()
+                            }
+                        ),
+                        left.pos,
+                        left.length + operator.length + right.length
+                    );
+                }
+            },
+            _ => {
+
+            }
+        };
+        return left;
+    }
+
+    fn parse_boolean_expression(&mut self) -> AstNode<Node> {
+        let mut left = self.parse_arithmatic();
+        loop{
+            match &self.look_ahead.token{
+                TokenType::More | TokenType::MoreEqual | TokenType::Equal | TokenType::Less | TokenType::LessEqual =>{
+                        let operator = match self.eat(&self.look_ahead.token.clone(),"") {
+                            Ok(t)=>t,
+                            Err(e) => {return e;}
+                        };
+                        let right = self.parse_arithmatic();
+                        left = AstNode::new(
+                            Node::BinaryExpression(
+                                BinExp {
+                                    left:Box::from(left.clone()),
+                                    right:Box::from(right.clone()),
+                                    operator:operator.clone()
+                                }
+                            ),
+                            left.pos,
+                            left.length + operator.length + right.length
+                        );
+                },
+                _ => {
+                    break;
+                }
+            };
+        }
+        
+        return left;
+    }
+
+    fn parse_arithmatic(&mut self) -> AstNode<Node> {
         let mut left = self.parse_term();
         match &self.look_ahead.token{
             TokenType::Range =>{
@@ -1292,27 +1528,7 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                             BinExp {
                                 left:Box::from(left.clone()),
                                 right:Box::from(right.clone()),
-                                operator:operator.node
-                            }
-                        ),
-                        left.pos,
-                        left.length + operator.length + right.length
-                    );
-                }
-            },
-            TokenType::Or =>{
-                while self.expected(&TokenType::Or){
-                    let operator = match self.eat(&TokenType::Or,"") {
-                        Ok(t)=>t,
-                        Err(e) => {return e;}
-                    };
-                    let right = self.parse_term();
-                    left = AstNode::new(
-                        Node::BinaryExpression(
-                            BinExp {
-                                left:Box::from(left.clone()),
-                                right:Box::from(right.clone()),
-                                operator:operator.node
+                                operator:operator.clone()
                             }
                         ),
                         left.pos,
@@ -1332,7 +1548,7 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
     fn parse_term(&mut self) -> AstNode<Node> {
         let mut left = self.parse_factor();
         match self.look_ahead.token{
-            TokenType::MultiplicationOperator | TokenType::DivisionOperator =>{
+            TokenType::MultiplicationOperator | TokenType::DivisionOperator | TokenType::ModuloOperator =>{
                 while self.expected(&TokenType::MultiplicationOperator) || self.expected(&TokenType::DivisionOperator) || self.expected(&TokenType::ModuloOperator){
                     let operator = match self.eat(&self.look_ahead.token.clone(),"") {
                         Ok(t)=>t,
@@ -1344,27 +1560,7 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                             BinExp {
                                 left:Box::from(left.clone()),
                                 right:Box::from(right.clone()),
-                                operator:operator.node
-                            }
-                        ),
-                        left.pos,
-                        left.length + operator.length + right.length
-                    );
-                }
-            },
-            TokenType::And =>{
-                while self.expected(&TokenType::And){
-                    let operator = match self.eat(&self.look_ahead.token.clone(),"") {
-                        Ok(t)=>t,
-                        Err(e) => {return e;}
-                    };
-                    let right = self.parse_term();
-                    left = AstNode::new(
-                        Node::BinaryExpression(
-                            BinExp {
-                                left:Box::from(left.clone()),
-                                right:Box::from(right.clone()),
-                                operator:operator.node
+                                operator:operator.clone()
                             }
                         ),
                         left.pos,
@@ -1427,6 +1623,13 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 };
                 AstNode::new(Node::Literal(LiteralValue::Str(s.clone())),str.pos,str.length)
             },
+            TokenType::BooleanLiteral(b) => {
+                let boolean = match self.eat(&TokenType::BooleanLiteral(true),"") {
+                    Ok(t)=>t,
+                    Err(e) => {return e;}
+                };
+                AstNode::new(Node::Literal(LiteralValue::Bool(*b)),boolean.pos,boolean.length)
+            },
             TokenType::LeftParen =>{
                 self.eat(&TokenType::LeftParen,"");
                 let out = self.parse_primary();
@@ -1487,37 +1690,14 @@ impl<'source,'error_pipe,'tokenizer> ArkParser<'source,'error_pipe,'tokenizer> {
                 )
             }
         };
-        if self.expected(&TokenType::More) ||self.expected(&TokenType::MoreEqual) || self.expected(&TokenType::Less) ||self.expected(&TokenType::LessEqual) ||self.expected(&TokenType::Equal) {
-            let operator = match self.eat(&self.look_ahead.token.clone(),"") {
-                Ok(t)=>t,
-                Err(e) => {return e;}
-            };
-            let right = self.parse_primary();
-            AstNode::new(
-                Node::BinaryExpression(
-                    BinExp {
-                        left: Box::new(AstNode::new(node.node, node.pos, node.length)),
-                        right: Box::new(right.clone()),
-                        operator:operator.node
-                    }
-                ),
-                node.pos,
-                node.length + operator.length + right.length
-            )
-        }
-        else{
-            node
-        }
+        node
         
     }
 
-    pub fn parse(&mut self) -> Option<Body> {
+    pub fn parse(&mut self) -> Body {
         let program = self.parse_body(TokenType::EOF);
-        if self.err_pipe.error_generated.borrow().len() > 0 {
-            None
-        }
-        else{
-            Some(program)
-        }
+        program
     }
+
 }
+

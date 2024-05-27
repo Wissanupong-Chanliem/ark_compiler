@@ -41,9 +41,9 @@ pub enum DataType{
 }
 
 #[derive(Debug,PartialEq,Clone)]
-struct Array {
-    length:u32,
-    data_type:Box<DataType>
+pub struct Array {
+    pub length:u32,
+    pub data_type:Box<DataType>
 }
 
 impl DataType{
@@ -99,7 +99,7 @@ impl DataType{
             DataType::F64 => 16,
             DataType::Char => 4,
             DataType::Boolean => 1,
-            DataType::Str(length) => length*2,
+            DataType::Str(length) => 4,
             DataType::Array(arr) => {
                 arr.length * arr.data_type.get_size_in_bytes()
                 // while discriminant(arr) == discriminant(DataType::Array(Array { length: 0, data_type: Void })){
@@ -138,6 +138,8 @@ pub enum TokenType{
     IntLiteral(i64),
     FloatLiteral(f64),
     StringLiteral(String),
+    CharLiteral(char),
+    BooleanLiteral(bool),
     AdditionOperator,
     SubtractionOperator,
     MultiplicationOperator,
@@ -222,33 +224,36 @@ impl<'a,'b> Tokenizer<'a,'b>{
             source:source_code,
             error_pipe,
             rules:vec![
-                (Regex::new(r"\Afunc\s").unwrap(),TokenType::Keyword(KeyWords::FUNC)),
-                (Regex::new(r"\Aimport\s").unwrap(),TokenType::Keyword(KeyWords::IMPORT)),
-                (Regex::new(r"\Aas\s").unwrap(),TokenType::Keyword(KeyWords::AS)),
-                (Regex::new(r"\Aconst\s").unwrap(),TokenType::Keyword(KeyWords::CONST)),
-                (Regex::new(r"\Areturn(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::RETURN)),
+                (Regex::new(r"\Afunc\s+").unwrap(),TokenType::Keyword(KeyWords::FUNC)),
+                (Regex::new(r"\Aimport\s+").unwrap(),TokenType::Keyword(KeyWords::IMPORT)),
+                (Regex::new(r"\Aas\s+").unwrap(),TokenType::Keyword(KeyWords::AS)),
+                (Regex::new(r"\Aconst\s+").unwrap(),TokenType::Keyword(KeyWords::CONST)),
+                (Regex::new(r"\Areturn(?=\s+|\(|;)").unwrap(),TokenType::Keyword(KeyWords::RETURN)),
                 (Regex::new(r"\Alet(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::LET)),
                 (Regex::new(r"\Awhile(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::WHILE)),
                 (Regex::new(r"\Afor(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::FOR)),
                 (Regex::new(r"\Aif(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::IF)),
-                (Regex::new(r"\Aelse(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::ELSE)),
+                (Regex::new(r"\Aelse(?=\s+|\{)").unwrap(),TokenType::Keyword(KeyWords::ELSE)),
                 (Regex::new(r"\Aelse\s+if(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::ELSEIF)),
                 (Regex::new(r"\Ain(?=\s+|\()").unwrap(),TokenType::Keyword(KeyWords::IN)),
                 (Regex::new(r#"\A".*""#).unwrap(),TokenType::StringLiteral(String::new())),
-                (Regex::new(r"\Ai8\W").unwrap(),TokenType::DataType(DataType::I8)),
-                (Regex::new(r"\Ai16\W").unwrap(),TokenType::DataType(DataType::I16)),
-                (Regex::new(r"\Ai32\W").unwrap(),TokenType::DataType(DataType::I32)),
-                (Regex::new(r"\Ai64\W").unwrap(),TokenType::DataType(DataType::I64)),
-                (Regex::new(r"\Au8\W").unwrap(),TokenType::DataType(DataType::U8)),
-                (Regex::new(r"\Au16\W").unwrap(),TokenType::DataType(DataType::U16)),
-                (Regex::new(r"\Au32\W").unwrap(),TokenType::DataType(DataType::U32)),
-                (Regex::new(r"\Au64\W").unwrap(),TokenType::DataType(DataType::U64)),
-                (Regex::new(r"\Af32\W").unwrap(),TokenType::DataType(DataType::F32)),
-                (Regex::new(r"\Af64\W").unwrap(),TokenType::DataType(DataType::F64)),
-                (Regex::new(r"\Avoid\W").unwrap(),TokenType::DataType(DataType::Void)),
-                (Regex::new(r"\Achar\W").unwrap(),TokenType::DataType(DataType::Char)),
-                (Regex::new(r"\Astr\W").unwrap(),TokenType::DataType(DataType::Str(0))),
-                (Regex::new(r"\Abool\W").unwrap(),TokenType::DataType(DataType::Boolean)),
+                (Regex::new(r#"\A'*'"#).unwrap(),TokenType::CharLiteral('a')),
+                (Regex::new(r"\Ai8(?=\W)").unwrap(),TokenType::DataType(DataType::I8)),
+                (Regex::new(r"\Ai16(?=\W)").unwrap(),TokenType::DataType(DataType::I16)),
+                (Regex::new(r"\Ai32(?=\W)").unwrap(),TokenType::DataType(DataType::I32)),
+                (Regex::new(r"\Ai64(?=\W)").unwrap(),TokenType::DataType(DataType::I64)),
+                (Regex::new(r"\Au8(?=\W)").unwrap(),TokenType::DataType(DataType::U8)),
+                (Regex::new(r"\Au16(?=\W)").unwrap(),TokenType::DataType(DataType::U16)),
+                (Regex::new(r"\Au32(?=\W)").unwrap(),TokenType::DataType(DataType::U32)),
+                (Regex::new(r"\Au64(?=\W)").unwrap(),TokenType::DataType(DataType::U64)),
+                (Regex::new(r"\Af32(?=\W)").unwrap(),TokenType::DataType(DataType::F32)),
+                (Regex::new(r"\Af64(?=\W)").unwrap(),TokenType::DataType(DataType::F64)),
+                (Regex::new(r"\Avoid(?=\W)").unwrap(),TokenType::DataType(DataType::Void)),
+                (Regex::new(r"\Achar(?=\W)").unwrap(),TokenType::DataType(DataType::Char)),
+                (Regex::new(r"\Astr(?=\W)").unwrap(),TokenType::DataType(DataType::Str(0))),
+                (Regex::new(r"\Abool(?=\W)").unwrap(),TokenType::DataType(DataType::Boolean)),
+                (Regex::new(r"\Atrue(?=\W)").unwrap(),TokenType::BooleanLiteral(true)),
+                (Regex::new(r"\Afalse(?=\W)").unwrap(),TokenType::BooleanLiteral(false)),
                 (Regex::new(r"\A[a-zA-Z]+[_0-9]*[_a-zA-Z0-9]*").unwrap(),TokenType::Identifier(String::new())),
                 (Regex::new(r"\A[0-9]+\.(?!\.)[0-9]*").unwrap(),TokenType::FloatLiteral(0.0)),
                 (Regex::new(r"\A[0-9]+").unwrap(),TokenType::IntLiteral(0)),
@@ -350,6 +355,12 @@ impl<'a,'b> Tokenizer<'a,'b>{
                         TokenType::StringLiteral(_) => {
                             TokenType::StringLiteral(cap.as_str()[1..cap.as_str().len()-1].to_string())
                         },
+                        TokenType::CharLiteral(_) => {
+                            if cap.as_str().len() > 3 {
+                                self.error_pipe.raise_error(crate::ErrorType::LexicalError, "char literal contain multiple character, consider using str instead", self.pos, 1);
+                            }
+                            TokenType::CharLiteral(cap.as_str().chars().nth(1).unwrap())
+                        },
                         TokenType::AdditionOperator => {
                             TokenType::AdditionOperator
                         },
@@ -425,9 +436,14 @@ impl<'a,'b> Tokenizer<'a,'b>{
                         TokenType::Not => {
                             TokenType::Not
                         },
-                        TokenType::SingleQuote => TokenType::SingleQuote,
+                        TokenType::SingleQuote => {
+                            self.error_pipe.raise_error(crate::ErrorType::LexicalError, "unclosed single quote", self.pos, 1);
+                            self.cursor = self.source.len() as u32;
+                            self.pos.1 += 1;
+                            return Token {token:TokenType::EOF,length:0,pos};
+                        },
                         TokenType::DoubleQuote => {
-                            self.error_pipe.raise_error(crate::ErrorType::LexicalError, "unclosed \" token", self.pos, 1);
+                            self.error_pipe.raise_error(crate::ErrorType::LexicalError, "unclosed double quote", self.pos, 1);
                             self.cursor = self.source.len() as u32;
                             self.pos.1 += 1;
                             return Token {token:TokenType::EOF,length:0,pos};
@@ -438,10 +454,13 @@ impl<'a,'b> Tokenizer<'a,'b>{
                         TokenType::RightBracket => {
                             TokenType::RightBracket
                         },
+                        TokenType::BooleanLiteral(b) => {
+                            TokenType::BooleanLiteral(*b)
+                        },
                     };
                     self.cursor += length;
                     self.pos.1 += length;
-                    println!("{:#?}",current_t);
+                    //println!("{:#?}",current_t);
                     return Token {token:current_t,length,pos};
                 },
                 Ok(None)=>{
